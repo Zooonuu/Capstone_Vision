@@ -9,12 +9,14 @@
 
 1. 훈련모델 검증 val_model.py 구성 (mAP)
 2. vision_ros2_node.py 업데이트 - 
-    "비전 파트에서 JSON Array 형태로 객체 리스트를 쏠 거야. 여기서 제일 중요한 건, 우리가 이미 내부적으로 가장 위험하고 시급한 물체를 0번 인덱스(parsed_data[0])로 정렬해 두었어."
+비전 파트에서 JSON Array 형태로 객체 리스트를 쏠 거야. 여기서 제일 중요한 건, 우리가 이미 내부적으로 가장 위험하고 시급한 물체를 0번 인덱스(parsed_data[0])로 정렬
 
-    "그러니까 ROS2 쪽에서는 여러 물체가 들어와도 고민할 필요 없이 무조건 배열의 첫 번째 데이터(data[0])만 뽑아서 그 안의 robot_action이 REMOVE면 center_coords로 주행을 시키고, EMERGENCY_STOP이나 ALARM이 뜨면 즉각 주행 취소 및 스피커 모듈을 울려주면 돼!"
+여러 물체가 들어와도 무조건 배열의 첫 번째 데이터(data[0])만 뽑아서 그 안의 robot_action이 REMOVE면 center_coords로 주행을 시키고, EMERGENCY_STOP이나 ALARM이 뜨면 즉각 주행 취소 및 스피커 모듈
 
 3. vision_ros2_node.py (좀 더 직관적인 버전 - 조건문 넣어서 조금 더 직관적이라고는 하는데 잘 모르겠음) 
 vision_ros2_node.py (직관적인 버전)
+
+
 import cv2
 import json
 import math
@@ -198,9 +200,11 @@ if __name__ == '__main__':
     main()
 
 
+
 4. 나중에 바꿀 수 있는 yaml 
 
-경로 설정 (반드시 본인 PC 경로로 맞춰주세요)
+경로 설정
+
 train: /home/joo/Desktop/Capstone_Vision/train/images
 val: /home/joo/Desktop/Capstone_Vision/valid/images
 test: /home/joo/Desktop/Capstone_Vision/test/images
