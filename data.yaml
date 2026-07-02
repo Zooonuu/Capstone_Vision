@@ -1,0 +1,14 @@
+# 수정된 data.yaml
+train: ./train/images
+val: ./valid/images
+test: ./test/images
+
+nc: 23
+names: ['C1x1x1', 'C2x1x0', 'C2x1x1', 'C2x2x0', 'C2x2x1', 'C3x1x0', 'C3x1x1', 'C3x2x0', 'C4x1x0', 'C4x1x1', 'C4x2x0', 'C4x2x1', 'H2x2x1', 'P1x2x1', 'P2x2x1', 'P4x2x1', 'S1x1x1', 'S2x2x0', 'S2x2x1', 'W2x1x2', 'X1x2x1', 'X2x2x1', 'Z1x1x1']
+
+roboflow:
+  workspace: gjwns2345-konkuk-ac-kr
+  project: lego-aprqg-dq2jb
+  version: 2
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/gjwns2345-konkuk-ac-kr/lego-aprqg-dq2jb/dataset/2
