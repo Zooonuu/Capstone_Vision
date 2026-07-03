@@ -14,12 +14,8 @@ yolo_detector_node:
     #   ros2 run robot_perception yolo_detector_node --ros-args -p model_path:=/abs/path/best.pt
     model_path: "best.pt"
 
-    # NOTE: must match whatever this specific model's `model.names` actually
-    # outputs. The class list below is the risk_db.py category convention
-    # (battery/coin/lego); the lego-piece-shape model trained via data.yaml in
-    # this repo instead outputs codes like "c1x1x1" and will not match these
-    # names as-is -- update this list (or retrain with these class names) to
-    # match your model before relying on the filter.
+    # risk_db에 있는 기본 관심 클래스입니다.
+    # 여기에 없는 클래스라도 아래 small-object 로직에 걸리면 Level 2로 처리됩니다.
     target_classes: ["battery", "coin", "lego"]
 
     confidence_threshold: 0.3
@@ -34,3 +30,14 @@ yolo_detector_node:
 
     # 로봇에 디스플레이가 없는 headless 환경에서는 false로 두세요 (cv2.imshow가 DISPLAY 필요).
     enable_visualization: true
+
+    # risk_db에 없는 클래스라도 bbox 면적이 battery/coin/lego 기준 bbox보다 작으면
+    # unknown_small_object로 간주해 Level 2(REMOVE, 입 근접 시 ALARM)로 처리합니다.
+    enable_unknown_small_object_risk: true
+    unknown_small_object_class_name: "unknown_small_object"
+    small_object_reference_classes: ["battery", "coin", "lego"]
+    small_object_reference_area_scale: 1.0
+
+    # 같은 프레임 안에서 기준 객체(battery/coin/lego)가 안 잡힌 경우의 보조 기준입니다.
+    # 예: 0.035 = 전체 이미지 면적의 3.5% 이하이면 작은 미확인 물체로 간주.
+    small_object_fallback_max_area_ratio: 0.035
