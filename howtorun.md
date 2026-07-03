@@ -2,7 +2,7 @@
 
 이 프로젝트는 두 개의 파트로 구성됩니다.
 
-- `vision_before/` : ROS2와 무관하게 독립적으로 돌릴 수 있는 YOLO11 학습/검증/테스트 스크립트 (원본)
+- 프로젝트 루트 (`test_image.py`, `val_model.py`, `vision_ros2_node.py`, `risk_db.py`) : ROS2와 무관하게 독립적으로 돌릴 수 있는 YOLO11 검증/테스트 스크립트 (원본)
 - `robot_ws/` : ROS2(colcon) 워크스페이스. `robot_perception`(YOLO 인식 노드), `robot_perception_msgs`(커스텀 메시지), `robot_slam`(라이다+엔코더 SLAM/로컬라이제이션)
 
 ## 0. 사전 준비
@@ -15,22 +15,19 @@
 pip install ultralytics mediapipe opencv-python
 ```
 
-## 1. YOLO 모델 학습/검증 (ROS2 없이)
+## 1. YOLO 모델 검증 (ROS2 없이)
 
-`data.yaml`이 있는 프로젝트 루트에서 실행합니다. (`vision_before/`의 스크립트와 `robot_ws/src/robot_perception/scripts/`의 스크립트는 동일 내용입니다.)
+`data.yaml`이 있는 프로젝트 루트에서 실행합니다. (루트 스크립트와 `robot_ws/src/robot_perception/scripts/`의 스크립트는 동일 내용입니다.) 학습 스크립트(`train.py`)는 삭제되었으므로, 이미 학습된 `best.pt`가 있다는 전제로 검증/테스트만 수행합니다.
 
 ```bash
-# 학습 (결과: runs/detect/lego_test_model/weights/best.pt)
-python3 vision_before/train.py
-
 # 학습된 모델 검증 (mAP50 / mAP50-95 출력)
-python3 vision_before/val_model.py
+python3 val_model.py
 
 # 정적 이미지 한 장으로 빠르게 확인
-python3 vision_before/test_image.py <이미지_경로> [best.pt 경로]
+python3 test_image.py <이미지_경로> [best.pt 경로]
 ```
 
-학습이 끝나면 나온 `best.pt`를 `robot_ws/src/robot_perception/` 하위(또는 원하는 절대경로)에 복사해두면 ROS2 노드에서 그대로 씁니다.
+`best.pt`를 `robot_ws/src/robot_perception/` 하위(또는 원하는 절대경로)에 두면 ROS2 노드에서 그대로 씁니다.
 
 ## 2. ROS2 워크스페이스 빌드
 
