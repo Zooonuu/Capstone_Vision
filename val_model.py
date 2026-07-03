@@ -26,3 +26,58 @@ def main():
 if __name__ == '__main__':
     multiprocessing.freeze_support()
     main()
+
+
+
+'''
+# val_test.py
+from ultralytics import YOLO
+import multiprocessing
+
+def main():
+    print("🚀 학습된 모델의 검증을 시작합니다...")
+
+    # ====================================================================
+    # [현재 사용] 레고 테스트 모델 불러오기
+    # ====================================================================
+    model = YOLO('best.pt') 
+    
+    metrics = model.val(
+        data='data.yaml', 
+        device='cpu'      
+    )
+
+    # ====================================================================
+    # [나중에 사용할 코드] 동전/건전지/레고 통합 최종 검증용
+    # 나중에 최종 학습이 끝나면 위 코드를 주석처리하고 아래 주석을 푸세요!
+    # ====================================================================
+    # # 주의: 학습이 끝난 후 runs/detect/final_safety_model/weights/best.pt 를 가져와야 합니다.
+    # model = YOLO('final_best.pt') 
+    #
+    # metrics = model.val(
+    #     data='final_data.yaml', # 3가지 객체가 모두 정의된 yaml
+    #     device='cpu'            # 검증은 금방 끝나므로 GPU가 없다면 CPU도 무방합니다.
+    # )
+
+    print("\n✅ 검증이 완료되었습니다!")
+    
+    # --------------------------------------------------------------------
+    # 🌟 캡스톤 방어 발표용 핵심 지표 출력 (Precision, Recall 추가)
+    # --------------------------------------------------------------------
+    print("\n[ 📊 전체 객체에 대한 핵심 점수 종합 ]")
+    print(f"▶ mAP50 (기본 종합 정확도) : {metrics.box.map50 * 100:.2f}%")
+    print(f"▶ mAP50-95 (엄격한 정확도) : {metrics.box.map * 100:.2f}%")
+    
+    # 새로 추가된 핵심 지표
+    print(f"▶ Precision (정밀도)       : {metrics.box.mp * 100:.2f}%")
+    print(f"▶ Recall (재현율)          : {metrics.box.mr * 100:.2f}%")
+
+    print("\n[ 💡 각 클래스(물체)별 상세 성적표 확인 방법 ]")
+    print("터미널에 출력된 표를 확인하거나, 'runs/detect/val/confusion_matrix.png' 파일을 꼭 확인하세요!")
+    print("동전/건전지/레고가 추가되면, 모델이 특정 물체를 다른 물체로 헷갈려하지 않는지 분석해야 합니다.")
+
+if __name__ == '__main__':
+    multiprocessing.freeze_support()
+    main()
+
+'''

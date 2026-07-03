@@ -19,7 +19,7 @@ class VisionDetectionNode(Node):
         self.publisher_ = self.create_publisher(String, 'vision/detected_objects', 10)
         
         # =====================================================================
-        # [주제 1. 객체 및 인체 인식 모듈 구축]
+        # [1. 객체 및 인체 인식 모듈 구축]
         # YOLOv11(물체 인식) 및 MediaPipe(인체 포즈 추정) 모델 로드 및 초기화
         # =====================================================================
         self.get_logger().info('YOLO & MediaPipe 모델 로드 중...')
@@ -45,8 +45,8 @@ class VisionDetectionNode(Node):
         h, w, _ = frame.shape
 
         # =====================================================================
-        # [주제 1-1. 인체 랜드마크 추출 (MediaPipe)]
-        # 아이의 양손 끝(검지)과 입 중앙의 픽셀 좌표를 실시간으로 추출합니다.
+        # [1-1. 인체 랜드마크 추출 (MediaPipe)]
+        # 아이의 양손 끝(검지)과 입 중앙의 픽셀 좌표를 실시간으로 추출
         # =====================================================================
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         pose_results = self.pose.process(rgb_frame)
@@ -68,11 +68,11 @@ class VisionDetectionNode(Node):
             m_right = landmarks[self.mp_pose.PoseLandmark.MOUTH_RIGHT]
             mouth = (int(((m_left.x + m_right.x) / 2) * w), int(((m_left.y + m_right.y) / 2) * h))
 
-            # 인체 뼈대 시각화
+            # 시각화
             self.mp_drawing.draw_landmarks(frame, pose_results.pose_landmarks, self.mp_pose.POSE_CONNECTIONS)
 
         # =====================================================================
-        # [주제 2. 객체 인식 및 위험도 DB 연동 로직]
+        # [2. 객체 인식 및 위험도 DB 연동 로직]
         # YOLOv11 추론 진행 (낮은 신뢰도 객체도 잡기 위해 conf를 0.3으로 하향)
         # =====================================================================
         results = self.model.predict(source=frame, conf=0.3, verbose=False)
@@ -98,7 +98,7 @@ class VisionDetectionNode(Node):
                 color = (0, 255, 255) # 노란색 (기본 주의)
 
                 # -------------------------------------------------------------
-                # [예외처리 1: 보수적 판단 (Conservative Judgment)]
+                # [예외처리 1: 판단]
                 # 인식률이 낮아(conf < 0.6) 형체가 애매한 경우 무조건 최소 Level 2 이상으로 간주
                 # -------------------------------------------------------------
                 if conf < 0.6 and base_level < 2:
@@ -106,7 +106,7 @@ class VisionDetectionNode(Node):
                     warning_msg = f"불확실성 높음: {class_name}을(를) Lv2로 상향 처리합니다."
 
                 # =====================================================================
-                # [주제 4. 돌발 상황 알고리즘 (삼킴 차단 트리거)]
+                # [4. 돌발 상황 알고리즘 (삼킴 차단)]
                 # 조건 A (손&&물체&&입) : 손이 바운딩 박스 안에 있고, 그 손이 입과 가까워짐
                 # 조건 B (물체&&입) : 물체의 중심이 입과 가까워짐 (던지거나 고개를 숙인 경우)
                 # =====================================================================
@@ -115,7 +115,7 @@ class VisionDetectionNode(Node):
                 distance_to_mouth = float('inf')
                 is_mouth_threat = False # 돌발 상황(입 근처) 트리거 플래그
 
-                # 1. 충돌 감지 (손이 BB 안에 들어왔는가?)
+                # 1. 겹침 감지 (손이 BB 안에 들어왔는가?)
                 for hand in hands:
                     hx, hy = hand
                     if x1 <= hx <= x2 and y1 <= hy <= y2:
@@ -123,7 +123,7 @@ class VisionDetectionNode(Node):
                         grabbed_hand = hand
                         break
                 
-                # 2. 거리 계산 및 트리거 판별 (임계치: 120 픽셀 기준)
+                # 2. 거리 계산 및 판별 (임계치: 120 픽셀 기준)
                 MOUTH_THRESHOLD = 120
 
                 if mouth:
@@ -141,8 +141,8 @@ class VisionDetectionNode(Node):
                         is_mouth_threat = True
 
                 # =====================================================================
-                # [주제 3. 다중 객체 우선 순위 정렬 및 오버라이드 로직]
-                # 위험도(Level)를 기반으로 동적 우선순위(Dynamic Priority) 점수 부여
+                # [3. 다중 객체 우선 순위 정렬 및 오버라이드 로직]
+                # 위험도(Level)를 기반으로 우선순위 점수 부여
                 # =====================================================================
                 dynamic_priority = base_level
 
@@ -155,7 +155,7 @@ class VisionDetectionNode(Node):
                     warning_msg = f"🚨 비상! {class_name} 삼킴 위험 감지!"
                     color = (0, 0, 255) # 빨간색 경고
                     
-                    # 시각화: 경고선 그리기
+                    # 시각화: 경고선
                     target_point = grabbed_hand if grabbed_hand else center_coords
                     cv2.line(frame, target_point, mouth, (0, 0, 255), 3)
 
@@ -176,17 +176,17 @@ class VisionDetectionNode(Node):
                 }
                 detected_objects.append(obj_data)
                 
-                # 화면 Bounding Box 및 텍스트 시각화
+                # 화면 BB 및 텍스트 시각화
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
                 cv2.putText(frame, f"{class_name} P:{dynamic_priority} {current_action}", 
                             (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
         # =====================================================================
-        # [주제 3-1. 위험도 기반 정렬 및 ROS 2 발행 (Publish)]
+        # [3-1. 위험도 기반 정렬 및 발행 (Publish)]
         # =====================================================================
         if detected_objects:
-            # 동적 우선순위(dynamic_priority)가 높은 순서대로 내림차순 정렬
-            # 즉, detected_objects[0] 이 항상 로봇이 지금 당장 처리해야 할 1순위 타겟(target)이 됨
+            # 우선순위가 높은 순서대로 내림차순 정렬
+            # 즉, detected_objects[0] 이 항상 로봇이 지금 당장 처리해야 할 1순위 타겟이 됨
             detected_objects.sort(key=lambda x: x['dynamic_priority'], reverse=True)
 
             msg = String()
