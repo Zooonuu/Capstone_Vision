@@ -1,0 +1,45 @@
+# robot_localization EKF - "map" instance.
+# Fuses the odom-instance output (/odometry/filtered) with slam_toolbox's
+# absolute pose estimate (/pose, PoseWithCovarianceStamped, published only
+# when robot_slam is launched in localization mode). Publishes map -> odom TF
+# and /odometry/filtered_map.
+#
+# This node is only meant to run in LOCALIZATION mode (slam_localization.launch.py).
+# In MAPPING mode, slam_toolbox publishes map -> odom itself and this node is
+# not launched (see slam_mapping.launch.py).
+ekf_filter_node_map:
+  ros__parameters:
+    frequency: 30.0
+    two_d_mode: true
+    print_diagnostics: true
+    publish_tf: true
+    publish_acceleration: false
+
+    map_frame: map
+    odom_frame: odom
+    base_link_frame: base_link
+    world_frame: map
+
+    odom0: /odometry/filtered
+    odom0_config: [true,  true,  false,
+                    false, false, true,
+                    true,  false, false,
+                    false, false, true,
+                    false, false, false]
+    odom0_differential: false
+    odom0_relative: false
+    odom0_queue_size: 10
+
+    pose0: /pose
+    pose0_config: [true,  true,  false,
+                    false, false, true,
+                    false, false, false,
+                    false, false, false,
+                    false, false, false]
+    pose0_differential: false
+    pose0_relative: false
+    pose0_queue_size: 5
+    pose0_rejection_threshold: 5.0
+
+    transform_time_offset: 0.0
+    transform_timeout: 0.0
