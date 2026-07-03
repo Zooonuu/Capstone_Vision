@@ -168,7 +168,7 @@ class VisionDetectionNode(Node):
                     "class": class_name,
                     "confidence": round(conf, 2),
                     "base_level": base_level,
-                    "dynamic_priority": dynamic_priority, # ROS2 팀원은 이 점수를 바탕으로 우선순위 판단
+                    "dynamic_priority": dynamic_priority, #  점수 바탕으로 우선순위 판단
                     "bounding_box": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
                     "center_coords": {"x": center_coords[0], "y": center_coords[1]},
                     "robot_action": current_action,
