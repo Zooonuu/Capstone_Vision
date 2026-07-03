@@ -24,5 +24,12 @@ RISK_DATABASE = {
         "robot_action_cmd": "REMOVE",
         "mouth_action_cmd": "ALARM",
         "msg": "주의 물체(레고) 감지. 수거 필요."
+    },
+    "unknown_small_object": {
+        "level": 2,
+        "status": "주의(Caution)",
+        "robot_action_cmd": "REMOVE",
+        "mouth_action_cmd": "ALARM",
+        "msg": "작은 미확인 물체 감지. 삼킴 위험 가능성으로 수거 필요."
     }
 }
