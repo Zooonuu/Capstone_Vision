@@ -1,0 +1,21 @@
+# 1. 파이썬 가상환경 및 캐시 (절대 올리면 안 됨)
+venv/
+__pycache__/
+*.pyc
+
+# 2. VS Code 설정 파일
+.vscode/
+
+# 3. YOLO 모델 가중치 및 학습 결과 (너무 무거움)
+*.pt
+runs/
+
+# 4. 이미지 데이터셋 (Roboflow에 있으므로 깃허브에 올릴 필요 없음)
+train/
+valid/
+val/
+test/
+
+# 5. OS 생성 쓰레기 파일
+.DS_Store
+Thumbs.db
