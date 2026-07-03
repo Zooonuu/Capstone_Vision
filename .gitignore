@@ -19,3 +19,8 @@ test/
 # 5. OS 생성 쓰레기 파일
 .DS_Store
 Thumbs.db
+
+# 6. colcon 빌드 산출물 (매번 자동 생성됨, 커밋 대상 아님)
+build/
+install/
+log/
