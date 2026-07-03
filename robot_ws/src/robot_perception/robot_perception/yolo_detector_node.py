@@ -13,6 +13,11 @@
 좌표계 변환(픽셀 -> 로봇/지면 좌표)은 이 노드에서 하지 않고 ground_projection_node가
 전담합니다.
 
+추가 위험도 로직:
+  - battery/coin/lego는 risk_db.py의 기존 위험도 그대로 처리합니다.
+  - risk_db.py에 없는 클래스라도 bbox가 battery/coin/lego 기준 bbox보다 작으면
+    unknown_small_object로 간주해 Level 2 위험도로 처리합니다.
+
 주의: 이 로봇의 웹캠은 로봇 최상단에서 지면을 향해 아래로 틸트되어 장착됩니다
 (robot_slam/README.md, config/camera_extrinsics.yaml 참고). 원본 코드는 사람 얼굴이
 정면으로 보이는 카메라 각도를 전제로 하므로, 실제 장착각에서 포즈/입-손 랜드마크가
@@ -63,6 +68,11 @@ class YoloDetectorNode(Node):
         self.declare_parameter('mouth_threshold_px', 120)
         self.declare_parameter('enable_pose_risk_scoring', True)
         self.declare_parameter('enable_visualization', True)
+        self.declare_parameter('enable_unknown_small_object_risk', True)
+        self.declare_parameter('unknown_small_object_class_name', 'unknown_small_object')
+        self.declare_parameter('small_object_reference_classes', ['battery', 'coin', 'lego'])
+        self.declare_parameter('small_object_reference_area_scale', 1.0)
+        self.declare_parameter('small_object_fallback_max_area_ratio', 0.035)
 
         image_topic = self.get_parameter('image_topic').value
         detections_topic = self.get_parameter('detections_topic').value
@@ -77,6 +87,17 @@ class YoloDetectorNode(Node):
         self.mouth_threshold_px = int(self.get_parameter('mouth_threshold_px').value)
         self.enable_pose_risk_scoring = bool(self.get_parameter('enable_pose_risk_scoring').value)
         self.enable_visualization = bool(self.get_parameter('enable_visualization').value)
+        self.enable_unknown_small_object_risk = bool(
+            self.get_parameter('enable_unknown_small_object_risk').value)
+        self.unknown_small_object_class_name = (
+            self.get_parameter('unknown_small_object_class_name').value.lower())
+        self.small_object_reference_classes = {
+            c.lower() for c in self.get_parameter('small_object_reference_classes').value
+        }
+        self.small_object_reference_area_scale = float(
+            self.get_parameter('small_object_reference_area_scale').value)
+        self.small_object_fallback_max_area_ratio = float(
+            self.get_parameter('small_object_fallback_max_area_ratio').value)
 
         if YOLO is None:
             raise RuntimeError(
@@ -117,6 +138,25 @@ class YoloDetectorNode(Node):
             return float('inf')
         return math.sqrt((p2[0] - p1[0]) ** 2 + (p2[1] - p1[1]) ** 2)
 
+    @staticmethod
+    def _bbox_area(x1, y1, x2, y2):
+        """bbox의 픽셀 면적을 계산합니다."""
+        return max(0, x2 - x1) * max(0, y2 - y1)
+
+    def _is_unknown_small_object(self, bbox_area, frame_area, reference_areas):
+        """미확인 객체 bbox가 삼킴 가능 크기 기준에 들어오는지 판단합니다."""
+        if not self.enable_unknown_small_object_risk:
+            return False
+        if bbox_area <= 0 or frame_area <= 0:
+            return False
+
+        if reference_areas:
+            max_reference_area = max(reference_areas) * self.small_object_reference_area_scale
+            return bbox_area <= max_reference_area
+
+        area_ratio = bbox_area / frame_area
+        return area_ratio <= self.small_object_fallback_max_area_ratio
+
     def _image_callback(self, msg: Image):
         now = time.monotonic()
         if self._min_infer_period and (now - self._last_infer_time) < self._min_infer_period:
@@ -125,6 +165,7 @@ class YoloDetectorNode(Node):
 
         frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
         h, w, _ = frame.shape
+        frame_area = w * h
 
         # ================================================================
         # [1. 인체 랜드마크 추출 (MediaPipe)] - 원본 vision_ros2_node.py 그대로 이식
@@ -159,6 +200,8 @@ class YoloDetectorNode(Node):
 
         pipeline_detections = []   # -> DetectionArray (ground_projection_node로 이어지는 입력)
         legacy_objects = []        # -> vision/detected_objects (원본 호환 JSON payload)
+        parsed_detections = []
+        reference_areas = []
 
         for result in results:
             for box in result.boxes:
@@ -166,80 +209,130 @@ class YoloDetectorNode(Node):
                 cls_id = int(box.cls[0])
                 conf = float(box.conf[0])
                 class_name = self.model.names[cls_id].lower()
+                bbox_area = self._bbox_area(x1, y1, x2, y2)
 
-                if self.target_classes and class_name not in self.target_classes:
-                    continue
-
-                pipeline_detections.append(Detection(
-                    class_id=cls_id,
-                    class_name=class_name,
-                    confidence=conf,
-                    bbox=[float(x1), float(y1), float(x2), float(y2)],
-                ))
-
-                risk_info = RISK_DATABASE.get(class_name)
-                if risk_info is None:
-                    continue  # 원본과 동일: risk_db에 없는 클래스는 우선순위/경고 판단에서 제외
-
-                center_coords = (int((x1 + x2) / 2), int((y1 + y2) / 2))
-                base_level = risk_info["level"]
-                current_action = risk_info["robot_action_cmd"]
-                warning_msg = risk_info["msg"]
-                color = (0, 255, 255)  # 기본 주의: 노란색
-
-                # [예외처리] 인식률이 낮아(conf < 0.6) 형체가 애매한 경우 무조건 최소 Level 2 이상으로 간주
-                if conf < 0.6 and base_level < 2:
-                    base_level = 2
-                    warning_msg = f"불확실성 높음: {class_name}을(를) Lv2로 상향 처리합니다."
-
-                is_grabbed = False
-                grabbed_hand = None
-                is_mouth_threat = False
-
-                for hand in hands:
-                    hx, hy = hand
-                    if x1 <= hx <= x2 and y1 <= hy <= y2:
-                        is_grabbed = True
-                        grabbed_hand = hand
-                        break
-
-                if mouth:
-                    if is_grabbed:
-                        dist_hand_mouth = self._calculate_distance(grabbed_hand, mouth)
-                        if dist_hand_mouth < self.mouth_threshold_px:
-                            is_mouth_threat = True
-                    dist_obj_mouth = self._calculate_distance(center_coords, mouth)
-                    if dist_obj_mouth < self.mouth_threshold_px:
-                        is_mouth_threat = True
-
-                dynamic_priority = base_level
-                if is_mouth_threat:
-                    dynamic_priority += 10
-                    current_action = risk_info["mouth_action_cmd"]
-                    warning_msg = f"🚨 비상! {class_name} 삼킴 위험 감지!"
-                    color = (0, 0, 255)
-                    self.get_logger().warn(warning_msg)
-                    if self.enable_visualization and cv2 is not None:
-                        target_point = grabbed_hand if grabbed_hand else center_coords
-                        cv2.line(frame, target_point, mouth, (0, 0, 255), 3)
-                elif base_level == 3:
-                    color = (0, 0, 255)
-
-                legacy_objects.append({
-                    "class": class_name,
-                    "confidence": round(conf, 2),
-                    "base_level": base_level,
-                    "dynamic_priority": dynamic_priority,
-                    "bounding_box": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
-                    "center_coords": {"x": center_coords[0], "y": center_coords[1]},
-                    "robot_action": current_action,
-                    "message": warning_msg,
+                parsed_detections.append({
+                    "x1": x1,
+                    "y1": y1,
+                    "x2": x2,
+                    "y2": y2,
+                    "bbox_area": bbox_area,
+                    "cls_id": cls_id,
+                    "conf": conf,
+                    "class_name": class_name,
                 })
 
+                if class_name in self.small_object_reference_classes:
+                    reference_areas.append(bbox_area)
+
+        for detection in parsed_detections:
+            x1 = detection["x1"]
+            y1 = detection["y1"]
+            x2 = detection["x2"]
+            y2 = detection["y2"]
+            bbox_area = detection["bbox_area"]
+            cls_id = detection["cls_id"]
+            conf = detection["conf"]
+            class_name = detection["class_name"]
+
+            risk_info = RISK_DATABASE.get(class_name)
+            risk_class_name = class_name
+            is_unknown_small_object = False
+
+            if risk_info is None:
+                if not self._is_unknown_small_object(bbox_area, frame_area, reference_areas):
+                    continue
+                risk_info = RISK_DATABASE.get(self.unknown_small_object_class_name)
+                if risk_info is None:
+                    self.get_logger().warn(
+                        f'{self.unknown_small_object_class_name} 항목이 risk_db.py에 없습니다.',
+                        throttle_duration_sec=2.0)
+                    continue
+                risk_class_name = self.unknown_small_object_class_name
+                is_unknown_small_object = True
+            elif self.target_classes and class_name not in self.target_classes:
+                continue
+
+            pipeline_detections.append(Detection(
+                class_id=cls_id,
+                class_name=class_name,
+                confidence=conf,
+                bbox=[float(x1), float(y1), float(x2), float(y2)],
+            ))
+
+            center_coords = (int((x1 + x2) / 2), int((y1 + y2) / 2))
+            base_level = risk_info["level"]
+            current_action = risk_info["robot_action_cmd"]
+            warning_msg = risk_info["msg"]
+            color = (0, 255, 255)  # 기본 주의: 노란색
+
+            if is_unknown_small_object:
+                warning_msg = (
+                    f"작은 미확인 물체({class_name}) 감지. "
+                    f"{risk_class_name} 기준 Lv{base_level}로 처리합니다.")
+
+            # [예외처리] 인식률이 낮아(conf < 0.6) 형체가 애매한 경우 무조건 최소 Level 2 이상으로 간주
+            if conf < 0.6 and base_level < 2:
+                base_level = 2
+                warning_msg = f"불확실성 높음: {class_name}을(를) Lv2로 상향 처리합니다."
+
+            is_grabbed = False
+            grabbed_hand = None
+            is_mouth_threat = False
+
+            for hand in hands:
+                hx, hy = hand
+                if x1 <= hx <= x2 and y1 <= hy <= y2:
+                    is_grabbed = True
+                    grabbed_hand = hand
+                    break
+
+            if mouth:
+                if is_grabbed:
+                    dist_hand_mouth = self._calculate_distance(grabbed_hand, mouth)
+                    if dist_hand_mouth < self.mouth_threshold_px:
+                        is_mouth_threat = True
+                dist_obj_mouth = self._calculate_distance(center_coords, mouth)
+                if dist_obj_mouth < self.mouth_threshold_px:
+                    is_mouth_threat = True
+
+            dynamic_priority = base_level
+            if is_mouth_threat:
+                dynamic_priority += 10
+                current_action = risk_info["mouth_action_cmd"]
+                warning_msg = f"🚨 비상! {class_name} 삼킴 위험 감지!"
+                color = (0, 0, 255)
+                self.get_logger().warn(warning_msg)
                 if self.enable_visualization and cv2 is not None:
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                    cv2.putText(frame, f"{class_name} P:{dynamic_priority} {current_action}",
-                                (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+                    target_point = grabbed_hand if grabbed_hand else center_coords
+                    cv2.line(frame, target_point, mouth, (0, 0, 255), 3)
+            elif base_level == 3:
+                color = (0, 0, 255)
+
+            legacy_objects.append({
+                "class": class_name,
+                "risk_class": risk_class_name,
+                "is_unknown_small_object": is_unknown_small_object,
+                "confidence": round(conf, 2),
+                "base_level": base_level,
+                "dynamic_priority": dynamic_priority,
+                "bounding_box": {
+                    "x1": x1,
+                    "y1": y1,
+                    "x2": x2,
+                    "y2": y2,
+                    "area": bbox_area,
+                    "area_ratio": round(bbox_area / frame_area, 5) if frame_area else 0.0,
+                },
+                "center_coords": {"x": center_coords[0], "y": center_coords[1]},
+                "robot_action": current_action,
+                "message": warning_msg,
+            })
+
+            if self.enable_visualization and cv2 is not None:
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                cv2.putText(frame, f"{class_name} P:{dynamic_priority} {current_action}",
+                            (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
         # ================================================================
         # [3. 발행] - 신규 파이프라인(DetectionArray) + 원본 호환 JSON 둘 다 발행
