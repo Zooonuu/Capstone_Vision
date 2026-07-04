@@ -40,3 +40,32 @@ RISK_DATABASE = {
         "msg": "입 크기보다 큰 미확인 물체 감지. 별도 행동 없이 인식만 수행."
     }
 }
+
+
+# 모델이 레고를 세부 부품 단위로 출력해도 안전 판단은 상위 위험 클래스(lego)로 통일합니다.
+# ROS2 파라미터 class_aliases로 덮어쓸 수 있으며, 형식은 "model_class:risk_class"입니다.
+DEFAULT_CLASS_ALIASES = {
+    "c1x1x1": "lego",
+    "c2x1x0": "lego",
+    "c2x1x1": "lego",
+    "c2x2x0": "lego",
+    "c2x2x1": "lego",
+    "c3x1x0": "lego",
+    "c3x1x1": "lego",
+    "c3x2x0": "lego",
+    "c4x1x0": "lego",
+    "c4x1x1": "lego",
+    "c4x2x0": "lego",
+    "c4x2x1": "lego",
+    "h2x2x1": "lego",
+    "p1x2x1": "lego",
+    "p2x2x1": "lego",
+    "p4x2x1": "lego",
+    "s1x1x1": "lego",
+    "s2x2x0": "lego",
+    "s2x2x1": "lego",
+    "w2x1x2": "lego",
+    "x1x2x1": "lego",
+    "x2x2x1": "lego",
+    "z1x1x1": "lego",
+}

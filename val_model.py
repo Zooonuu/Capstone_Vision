@@ -5,6 +5,8 @@ from pathlib import Path
 
 from ultralytics import YOLO
 
+from risk_db import DEFAULT_CLASS_ALIASES
+
 
 MODEL_PATH = 'best.pt'
 DATA_PATH = 'data.yaml'
@@ -44,6 +46,15 @@ def _class_names_to_list(class_names):
     return []
 
 
+def _risk_class_summary(class_names):
+    summary = {}
+    for class_name in _class_names_to_list(class_names):
+        normalized_name = str(class_name).lower()
+        risk_class = DEFAULT_CLASS_ALIASES.get(normalized_name, normalized_name)
+        summary.setdefault(risk_class, []).append(str(class_name))
+    return {risk_class: sorted(names) for risk_class, names in sorted(summary.items())}
+
+
 def _repo_relative_path(path):
     path = Path(path)
     try:
@@ -57,6 +68,7 @@ def _write_validation_report(metrics, class_names):
     save_dir.mkdir(parents=True, exist_ok=True)
 
     box = metrics.box
+    risk_class_summary = _risk_class_summary(class_names)
     summary = {
         'generated_at': datetime.now().isoformat(timespec='seconds'),
         'model_path': MODEL_PATH,
@@ -64,12 +76,20 @@ def _write_validation_report(metrics, class_names):
         'save_dir': _repo_relative_path(save_dir),
         'report_dir': str(REPORT_DIR),
         'class_count': len(_class_names_to_list(class_names)),
+        'risk_class_summary': risk_class_summary,
         'metrics': {
             'precision': _percent(getattr(box, 'mp', None)),
             'recall': _percent(getattr(box, 'mr', None)),
             'map50': _percent(getattr(box, 'map50', None)),
             'map50_95': _percent(getattr(box, 'map', None)),
         },
+        'safety_evaluation_protocol': [
+            'risk_class_mapping_accuracy',
+            'stable_detection_before_remove',
+            'emergency_stop_false_negative_rate',
+            'emergency_stop_false_positive_rate',
+            'top_priority_target_accuracy',
+        ],
         'artifacts': {},
     }
 
@@ -102,9 +122,30 @@ def _write_validation_report(metrics, class_names):
         f'| mAP50 | {_format_percent(summary["metrics"]["map50"])} |',
         f'| mAP50-95 | {_format_percent(summary["metrics"]["map50_95"])} |',
         '',
+        '## Safety Mapping',
+        '',
+        '| Risk Class | Model Classes |',
+        '|---|---|',
+    ]
+
+    for risk_class, mapped_names in risk_class_summary.items():
+        lines.append(f'| `{risk_class}` | `{", ".join(mapped_names)}` |')
+
+    lines.extend([
+        '',
+        '## Safety Evaluation Protocol',
+        '',
+        '| 항목 | 확인 내용 |',
+        '|---|---|',
+        '| 위험 클래스 매핑 정확도 | 모델 세부 class가 `battery`/`coin`/`lego` 등 상위 위험 class로 올바르게 변환되는지 확인 |',
+        '| 안정 검출 후 수거 | 같은 bbox가 연속 프레임에서 유지될 때만 `REMOVE`로 확정되는지 확인 |',
+        '| 긴급정지 미탐률 | 입/손 근접 상황에서 `EMERGENCY_STOP`을 놓친 비율 확인 |',
+        '| 긴급정지 오탐률 | 입 근접이 아닌 상황에서 `EMERGENCY_STOP`이 잘못 발생한 비율 확인 |',
+        '| 1순위 목표 정확도 | 여러 객체 중 `risk_score`가 가장 높은 객체가 실제 최우선 위험물인지 확인 |',
+        '',
         '## Artifacts',
         '',
-    ]
+    ])
 
     if summary['artifacts']:
         for artifact_name, artifact_path in summary['artifacts'].items():

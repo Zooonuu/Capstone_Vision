@@ -18,14 +18,50 @@ yolo_detector_node:
     # 실제 action 판단은 risk_db와 아래 unknown-object 로직을 기준으로 합니다.
     target_classes: ["battery", "coin", "lego"]
 
+    # 모델이 레고를 세부 부품 클래스로 출력해도 안전 판단은 lego로 통합합니다.
+    # 형식: "model_class:risk_class"
+    class_aliases:
+      - "C1x1x1:lego"
+      - "C2x1x0:lego"
+      - "C2x1x1:lego"
+      - "C2x2x0:lego"
+      - "C2x2x1:lego"
+      - "C3x1x0:lego"
+      - "C3x1x1:lego"
+      - "C3x2x0:lego"
+      - "C4x1x0:lego"
+      - "C4x1x1:lego"
+      - "C4x2x0:lego"
+      - "C4x2x1:lego"
+      - "H2x2x1:lego"
+      - "P1x2x1:lego"
+      - "P2x2x1:lego"
+      - "P4x2x1:lego"
+      - "S1x1x1:lego"
+      - "S2x2x0:lego"
+      - "S2x2x1:lego"
+      - "W2x1x2:lego"
+      - "X1x2x1:lego"
+      - "X2x2x1:lego"
+      - "Z1x1x1:lego"
+
     confidence_threshold: 0.3
     device: "cpu"          # "cpu" | "0" (first GPU) | ...
     inference_rate_hz: 15.0
+
+    # 오탐을 줄이기 위해 같은 위험물이 stable_detection_frames만큼 연속 확인되어야
+    # REMOVE로 확정합니다. 입 근접 EMERGENCY_STOP은 지연 없이 즉시 발행합니다.
+    stable_detection_frames: 3
+    lost_track_ttl_frames: 5
+    track_iou_threshold: 0.3
 
     # 원본 vision_ros2_node.py의 MediaPipe 입-손 근접(삼킴 위험) 판단 로직.
     # 참고: 이 로봇 웹캠은 지면을 향해 아래로 틸트되어 있어 사람 얼굴이 항상 보이는 각도가
     # 아닐 수 있음 - 실측 후 필요 없으면 enable_pose_risk_scoring: false로 끄면 됨.
     mouth_threshold_px: 120
+    mouth_threshold_scale: 4.0
+    mouth_min_threshold_px: 60.0
+    mouth_max_threshold_px: 180.0
     enable_pose_risk_scoring: true
 
     # 로봇에 디스플레이가 없는 headless 환경에서는 false로 두세요 (cv2.imshow가 DISPLAY 필요).

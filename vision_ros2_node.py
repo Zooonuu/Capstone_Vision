@@ -9,7 +9,7 @@ from ultralytics import YOLO
 import mediapipe as mp
 
 # 앞서 만든 위험도 DB 임포트 (risk_db.py)
-from risk_db import RISK_DATABASE
+from risk_db import DEFAULT_CLASS_ALIASES, RISK_DATABASE
 
 class VisionDetectionNode(Node):
     def __init__(self):
@@ -24,6 +24,7 @@ class VisionDetectionNode(Node):
         # =====================================================================
         self.get_logger().info('YOLO & MediaPipe 모델 로드 중...')
         self.model = YOLO('best.pt') 
+        self.class_aliases = DEFAULT_CLASS_ALIASES
         
         self.mp_pose = mp.solutions.pose
         self.pose = self.mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5)
@@ -98,6 +99,7 @@ class VisionDetectionNode(Node):
                 cls_id = int(box.cls[0])
                 conf = float(box.conf[0])
                 class_name = self.model.names[cls_id].lower() 
+                aliased_risk_class_name = self.class_aliases.get(class_name, class_name)
                 bbox_area = max(0, x2 - x1) * max(0, y2 - y1)
 
                 parsed_detections.append({
@@ -109,9 +111,10 @@ class VisionDetectionNode(Node):
                     "cls_id": cls_id,
                     "conf": conf,
                     "class_name": class_name,
+                    "aliased_risk_class_name": aliased_risk_class_name,
                 })
 
-                if class_name in small_object_reference_classes:
+                if aliased_risk_class_name in small_object_reference_classes:
                     reference_areas.append(bbox_area)
 
         for detection in parsed_detections:
@@ -122,11 +125,12 @@ class VisionDetectionNode(Node):
                 bbox_area = detection["bbox_area"]
                 conf = detection["conf"]
                 class_name = detection["class_name"]
+                aliased_risk_class_name = detection["aliased_risk_class_name"]
                 center_coords = (int((x1 + x2) / 2), int((y1 + y2) / 2))
 
                 # DB 매칭
-                risk_info = RISK_DATABASE.get(class_name, None)
-                risk_class_name = class_name
+                risk_info = RISK_DATABASE.get(aliased_risk_class_name, None)
+                risk_class_name = aliased_risk_class_name
                 is_unknown_small_object = False
                 is_unknown_large_object = False
                 if not risk_info:

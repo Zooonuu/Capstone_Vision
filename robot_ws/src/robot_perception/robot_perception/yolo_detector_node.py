@@ -36,7 +36,7 @@ from std_msgs.msg import String
 from cv_bridge import CvBridge
 
 from robot_perception_msgs.msg import Detection, DetectionArray
-from robot_perception.risk_db import RISK_DATABASE
+from robot_perception.risk_db import DEFAULT_CLASS_ALIASES, RISK_DATABASE
 
 try:
     from ultralytics import YOLO
@@ -78,6 +78,15 @@ class YoloDetectorNode(Node):
         self.declare_parameter('small_object_fallback_max_area_ratio', 0.035)
         self.declare_parameter('mouth_size_area_scale', 1.0)
         self.declare_parameter('mouth_fallback_area_ratio', 0.035)
+        self.declare_parameter(
+            'class_aliases',
+            [f'{src}:{dst}' for src, dst in sorted(DEFAULT_CLASS_ALIASES.items())])
+        self.declare_parameter('stable_detection_frames', 3)
+        self.declare_parameter('lost_track_ttl_frames', 5)
+        self.declare_parameter('track_iou_threshold', 0.3)
+        self.declare_parameter('mouth_threshold_scale', 4.0)
+        self.declare_parameter('mouth_min_threshold_px', 60.0)
+        self.declare_parameter('mouth_max_threshold_px', 180.0)
 
         image_topic = self.get_parameter('image_topic').value
         detections_topic = self.get_parameter('detections_topic').value
@@ -108,6 +117,18 @@ class YoloDetectorNode(Node):
         self.mouth_size_area_scale = float(self.get_parameter('mouth_size_area_scale').value)
         self.mouth_fallback_area_ratio = float(
             self.get_parameter('mouth_fallback_area_ratio').value)
+        self.class_aliases = self._parse_class_aliases(
+            self.get_parameter('class_aliases').value)
+        self.stable_detection_frames = max(
+            1, int(self.get_parameter('stable_detection_frames').value))
+        self.lost_track_ttl_frames = max(
+            1, int(self.get_parameter('lost_track_ttl_frames').value))
+        self.track_iou_threshold = float(self.get_parameter('track_iou_threshold').value)
+        self.mouth_threshold_scale = float(self.get_parameter('mouth_threshold_scale').value)
+        self.mouth_min_threshold_px = float(self.get_parameter('mouth_min_threshold_px').value)
+        self.mouth_max_threshold_px = float(self.get_parameter('mouth_max_threshold_px').value)
+        self._tracks = {}
+        self._next_track_id = 1
 
         if YOLO is None:
             raise RuntimeError(
@@ -117,7 +138,8 @@ class YoloDetectorNode(Node):
         self.model = YOLO(model_path)
         self.get_logger().info(
             f'모델 로드 완료. target_classes={sorted(self.target_classes)}, '
-            f'conf_threshold={self.confidence_threshold}')
+            f'conf_threshold={self.confidence_threshold}, '
+            f'class_aliases={len(self.class_aliases)}개')
 
         self.mp_pose = None
         self.pose = None
@@ -152,6 +174,116 @@ class YoloDetectorNode(Node):
     def _bbox_area(x1, y1, x2, y2):
         """bbox의 픽셀 면적을 계산합니다."""
         return max(0, x2 - x1) * max(0, y2 - y1)
+
+    def _parse_class_aliases(self, alias_entries):
+        """ROS 파라미터의 "model_class:risk_class" 목록을 dict로 변환합니다."""
+        aliases = {}
+        for entry in alias_entries:
+            if ':' not in entry:
+                self.get_logger().warn(f'잘못된 class_alias 형식입니다: {entry}')
+                continue
+            src, dst = entry.split(':', 1)
+            src = src.strip().lower()
+            dst = dst.strip().lower()
+            if not src or not dst:
+                self.get_logger().warn(f'비어 있는 class_alias 항목입니다: {entry}')
+                continue
+            aliases[src] = dst
+        return aliases
+
+    def _risk_class_for_model_class(self, class_name):
+        """모델 출력 클래스를 안전 판단용 상위 클래스로 정규화합니다."""
+        return self.class_aliases.get(class_name.lower(), class_name.lower())
+
+    @staticmethod
+    def _bbox_iou(a, b):
+        """두 bbox(x1, y1, x2, y2)의 IoU를 계산합니다."""
+        ax1, ay1, ax2, ay2 = a
+        bx1, by1, bx2, by2 = b
+        inter_x1 = max(ax1, bx1)
+        inter_y1 = max(ay1, by1)
+        inter_x2 = min(ax2, bx2)
+        inter_y2 = min(ay2, by2)
+        inter_area = max(0, inter_x2 - inter_x1) * max(0, inter_y2 - inter_y1)
+        if inter_area <= 0:
+            return 0.0
+        area_a = max(0, ax2 - ax1) * max(0, ay2 - ay1)
+        area_b = max(0, bx2 - bx1) * max(0, by2 - by1)
+        union_area = area_a + area_b - inter_area
+        return inter_area / union_area if union_area else 0.0
+
+    def _update_track(self, risk_class_name, bbox, matched_track_ids):
+        """IoU 기반으로 같은 위험물을 시간축에서 묶고 안정 검출 여부를 반환합니다."""
+        best_track_id = None
+        best_iou = 0.0
+        for track_id, track in self._tracks.items():
+            if track_id in matched_track_ids:
+                continue
+            if track['risk_class_name'] != risk_class_name:
+                continue
+            iou = self._bbox_iou(bbox, track['bbox'])
+            if iou > best_iou:
+                best_track_id = track_id
+                best_iou = iou
+
+        if best_track_id is None or best_iou < self.track_iou_threshold:
+            best_track_id = self._next_track_id
+            self._next_track_id += 1
+            self._tracks[best_track_id] = {
+                'risk_class_name': risk_class_name,
+                'bbox': bbox,
+                'seen_frames': 0,
+                'missed_frames': 0,
+            }
+
+        track = self._tracks[best_track_id]
+        track['bbox'] = bbox
+        track['seen_frames'] += 1
+        track['missed_frames'] = 0
+        matched_track_ids.add(best_track_id)
+        return best_track_id, track['seen_frames'], track['seen_frames'] >= self.stable_detection_frames
+
+    def _age_unmatched_tracks(self, matched_track_ids):
+        """현재 프레임에서 매칭되지 않은 오래된 track을 제거합니다."""
+        stale_track_ids = []
+        for track_id, track in self._tracks.items():
+            if track_id in matched_track_ids:
+                continue
+            track['missed_frames'] += 1
+            if track['missed_frames'] > self.lost_track_ttl_frames:
+                stale_track_ids.append(track_id)
+        for track_id in stale_track_ids:
+            del self._tracks[track_id]
+
+    def _mouth_distance_threshold(self, mouth_width_px, frame_area):
+        """고정 픽셀값 대신 입 크기/프레임 크기를 반영한 입 근접 거리 기준을 만듭니다."""
+        if mouth_width_px and mouth_width_px > 0:
+            threshold = mouth_width_px * self.mouth_threshold_scale
+            source = 'mouth_width_scaled'
+        else:
+            frame_side = math.sqrt(frame_area) if frame_area > 0 else self.mouth_threshold_px
+            threshold = min(self.mouth_threshold_px, frame_side * 0.16)
+            source = 'fallback_frame_scale'
+
+        threshold = max(self.mouth_min_threshold_px, threshold)
+        threshold = min(self.mouth_max_threshold_px, threshold)
+        return threshold, source
+
+    @staticmethod
+    def _risk_score(base_level, conf, is_mouth_threat, is_grabbed,
+                    is_track_stable, is_unknown_small_object):
+        """위험도, 신뢰도, 행동 맥락, 시간축 안정성을 하나의 우선순위 점수로 통합합니다."""
+        score = base_level * 20.0
+        score += max(0.0, min(conf, 1.0)) * 10.0
+        if is_track_stable:
+            score += 10.0
+        if is_grabbed:
+            score += 15.0
+        if is_mouth_threat:
+            score += 40.0
+        if is_unknown_small_object:
+            score += 5.0
+        return round(score, 2)
 
     def _mouth_area_threshold(self, mouth_width_px, frame_area):
         """입꼬리 간 거리로 미확인 객체 분류용 입 크기 면적 기준을 계산합니다."""
@@ -239,7 +371,10 @@ class YoloDetectorNode(Node):
         legacy_objects = []        # -> vision/detected_objects (원본 호환 JSON payload)
         parsed_detections = []
         reference_areas = []
+        matched_track_ids = set()
         mouth_area_threshold, mouth_size_source = self._mouth_area_threshold(
+            mouth_width_px, frame_area)
+        mouth_distance_threshold, mouth_distance_source = self._mouth_distance_threshold(
             mouth_width_px, frame_area)
 
         for result in results:
@@ -248,6 +383,7 @@ class YoloDetectorNode(Node):
                 cls_id = int(box.cls[0])
                 conf = float(box.conf[0])
                 class_name = self.model.names[cls_id].lower()
+                aliased_risk_class_name = self._risk_class_for_model_class(class_name)
                 bbox_area = self._bbox_area(x1, y1, x2, y2)
 
                 parsed_detections.append({
@@ -259,9 +395,10 @@ class YoloDetectorNode(Node):
                     "cls_id": cls_id,
                     "conf": conf,
                     "class_name": class_name,
+                    "aliased_risk_class_name": aliased_risk_class_name,
                 })
 
-                if class_name in self.small_object_reference_classes:
+                if aliased_risk_class_name in self.small_object_reference_classes:
                     reference_areas.append(bbox_area)
 
         for detection in parsed_detections:
@@ -273,11 +410,16 @@ class YoloDetectorNode(Node):
             cls_id = detection["cls_id"]
             conf = detection["conf"]
             class_name = detection["class_name"]
+            aliased_risk_class_name = detection["aliased_risk_class_name"]
 
-            risk_info = RISK_DATABASE.get(class_name)
-            risk_class_name = class_name
+            risk_info = RISK_DATABASE.get(aliased_risk_class_name)
+            risk_class_name = aliased_risk_class_name
             is_unknown_small_object = False
             is_unknown_large_object = False
+            reason_codes = []
+
+            if risk_class_name != class_name:
+                reason_codes.append(f'CLASS_ALIAS:{class_name}->{risk_class_name}')
 
             if risk_info is None:
                 risk_class_name = self._unknown_object_risk_class(
@@ -292,19 +434,17 @@ class YoloDetectorNode(Node):
                     continue
                 is_unknown_small_object = risk_class_name == self.unknown_small_object_class_name
                 is_unknown_large_object = risk_class_name == self.unknown_large_object_class_name
-
-            pipeline_detections.append(Detection(
-                class_id=cls_id,
-                class_name=class_name,
-                confidence=conf,
-                bbox=[float(x1), float(y1), float(x2), float(y2)],
-            ))
+                if is_unknown_small_object:
+                    reason_codes.append('UNKNOWN_SMALL_OBJECT')
+                if is_unknown_large_object:
+                    reason_codes.append('UNKNOWN_LARGE_OBJECT')
 
             center_coords = (int((x1 + x2) / 2), int((y1 + y2) / 2))
             base_level = risk_info["level"]
             current_action = risk_info["robot_action_cmd"]
             warning_msg = risk_info["msg"]
             color = (0, 255, 255)  # 기본 주의: 노란색
+            reason_codes.append(f'RISK_LEVEL_{base_level}')
 
             if is_unknown_small_object:
                 warning_msg = (
@@ -321,6 +461,7 @@ class YoloDetectorNode(Node):
             if conf < 0.6 and base_level < 2 and not is_recognition_only:
                 base_level = 2
                 warning_msg = f"불확실성 높음: {class_name}을(를) Lv2로 상향 처리합니다."
+                reason_codes.append('LOW_CONFIDENCE_LEVEL_UP')
 
             is_grabbed = False
             grabbed_hand = None
@@ -331,20 +472,31 @@ class YoloDetectorNode(Node):
                 if x1 <= hx <= x2 and y1 <= hy <= y2:
                     is_grabbed = True
                     grabbed_hand = hand
+                    reason_codes.append('HAND_INSIDE_BBOX')
                     break
 
             if mouth:
                 if is_grabbed:
                     dist_hand_mouth = self._calculate_distance(grabbed_hand, mouth)
-                    if dist_hand_mouth < self.mouth_threshold_px:
+                    if dist_hand_mouth < mouth_distance_threshold:
                         is_mouth_threat = True
+                        reason_codes.append('HAND_NEAR_MOUTH')
                 dist_obj_mouth = self._calculate_distance(center_coords, mouth)
-                if dist_obj_mouth < self.mouth_threshold_px:
+                if dist_obj_mouth < mouth_distance_threshold:
                     is_mouth_threat = True
+                    reason_codes.append('OBJECT_NEAR_MOUTH')
 
-            dynamic_priority = base_level
+            track_id, seen_frames, is_track_stable = self._update_track(
+                risk_class_name, (x1, y1, x2, y2), matched_track_ids)
+            if is_track_stable:
+                reason_codes.append(f'STABLE_TRACK_{seen_frames}_FRAMES')
+            else:
+                reason_codes.append(f'UNSTABLE_TRACK_{seen_frames}_OF_{self.stable_detection_frames}')
+
+            dynamic_priority = self._risk_score(
+                base_level, conf, is_mouth_threat, is_grabbed,
+                is_track_stable, is_unknown_small_object)
             if is_mouth_threat and base_level >= 2:
-                dynamic_priority += 10
                 current_action = "EMERGENCY_STOP"
                 warning_msg = f"🚨 비상! {class_name} 삼킴 위험 감지!"
                 color = (0, 0, 255)
@@ -352,8 +504,25 @@ class YoloDetectorNode(Node):
                 if self.enable_visualization and cv2 is not None:
                     target_point = grabbed_hand if grabbed_hand else center_coords
                     cv2.line(frame, target_point, mouth, (0, 0, 255), 3)
+            elif not is_track_stable and current_action == "REMOVE":
+                current_action = "NONE"
+                warning_msg = (
+                    f"{class_name} 후보 감지: {seen_frames}/{self.stable_detection_frames}프레임 "
+                    "연속 확인 후 수거 대상으로 확정합니다.")
             elif base_level == 3:
                 color = (0, 0, 255)
+
+            pipeline_detections.append(Detection(
+                class_id=cls_id,
+                class_name=class_name,
+                confidence=conf,
+                bbox=[float(x1), float(y1), float(x2), float(y2)],
+                risk_class_name=risk_class_name,
+                risk_level=int(base_level),
+                risk_score=float(dynamic_priority),
+                robot_action=current_action,
+                reason_codes=reason_codes,
+            ))
 
             legacy_objects.append({
                 "class": class_name,
@@ -363,6 +532,12 @@ class YoloDetectorNode(Node):
                 "confidence": round(conf, 2),
                 "base_level": base_level,
                 "dynamic_priority": dynamic_priority,
+                "track": {
+                    "id": track_id,
+                    "seen_frames": seen_frames,
+                    "stable": is_track_stable,
+                    "required_stable_frames": self.stable_detection_frames,
+                },
                 "bounding_box": {
                     "x1": x1,
                     "y1": y1,
@@ -376,9 +551,12 @@ class YoloDetectorNode(Node):
                     "area_threshold_px": round(mouth_area_threshold, 2)
                     if mouth_area_threshold else None,
                     "source": mouth_size_source,
+                    "distance_threshold_px": round(mouth_distance_threshold, 2),
+                    "distance_source": mouth_distance_source,
                 },
                 "center_coords": {"x": center_coords[0], "y": center_coords[1]},
                 "robot_action": current_action,
+                "reason_codes": reason_codes,
                 "message": warning_msg,
             })
 
@@ -386,6 +564,8 @@ class YoloDetectorNode(Node):
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
                 cv2.putText(frame, f"{class_name} P:{dynamic_priority} {current_action}",
                             (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+
+        self._age_unmatched_tracks(matched_track_ids)
 
         # ================================================================
         # [3. 발행] - 신규 파이프라인(DetectionArray) + 원본 호환 JSON 둘 다 발행

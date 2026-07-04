@@ -5,12 +5,46 @@
   "save_dir": "runs/detect/val",
   "report_dir": "reports/validation",
   "class_count": 23,
+  "risk_class_summary": {
+    "lego": [
+      "C1x1x1",
+      "C2x1x0",
+      "C2x1x1",
+      "C2x2x0",
+      "C2x2x1",
+      "C3x1x0",
+      "C3x1x1",
+      "C3x2x0",
+      "C4x1x0",
+      "C4x1x1",
+      "C4x2x0",
+      "C4x2x1",
+      "H2x2x1",
+      "P1x2x1",
+      "P2x2x1",
+      "P4x2x1",
+      "S1x1x1",
+      "S2x2x0",
+      "S2x2x1",
+      "W2x1x2",
+      "X1x2x1",
+      "X2x2x1",
+      "Z1x1x1"
+    ]
+  },
   "metrics": {
     "precision": 46.17,
     "recall": 53.51,
     "map50": 57.41,
     "map50_95": 48.52
   },
+  "safety_evaluation_protocol": [
+    "risk_class_mapping_accuracy",
+    "stable_detection_before_remove",
+    "emergency_stop_false_negative_rate",
+    "emergency_stop_false_positive_rate",
+    "top_priority_target_accuracy"
+  ],
   "artifacts": {
     "confusion_matrix.png": "runs/detect/val/confusion_matrix.png",
     "confusion_matrix_normalized.png": "runs/detect/val/confusion_matrix_normalized.png",
