@@ -47,7 +47,7 @@ Capstone_Vision/
 |---|---|
 | `data.yaml` | YOLO 학습/검증 데이터 설정. 현재는 레고 세부 클래스 23개 기준입니다. |
 | `test_image.py` | 정적 이미지 1장을 YOLO로 테스트하고 bbox/confidence를 확인합니다. |
-| `val_model.py` | `best.pt`를 `data.yaml` 기준으로 검증해 mAP 점수를 확인합니다. |
+| `val_model.py` | `best.pt`를 `data.yaml` 기준으로 검증해 mAP/Precision/Recall과 `reports/validation` 리포트를 확인합니다. |
 | `risk_db.py` | 원본 위험도 DB입니다. ROS2 패키지 안에도 같은 목적의 DB가 있습니다. |
 | `vision_ros2_node.py` | 초기 ROS2 스타일 웹캠 테스트 노드입니다. 현재 주력 실행 코드는 `robot_ws` 안의 `yolo_detector_node.py`입니다. |
 

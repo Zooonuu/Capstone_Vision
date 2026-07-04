@@ -20,12 +20,16 @@ pip install ultralytics mediapipe opencv-python
 `data.yaml`이 있는 프로젝트 루트에서 실행합니다. (루트 스크립트와 `robot_ws/src/robot_perception/scripts/`의 스크립트는 동일 내용입니다.) 학습 스크립트(`train.py`)는 삭제되었으므로, 이미 학습된 `best.pt`가 있다는 전제로 검증/테스트만 수행합니다.
 
 ```bash
-# 학습된 모델 검증 (mAP50 / mAP50-95 출력)
+# 학습된 모델 검증 (mAP50 / mAP50-95 / Precision / Recall 출력)
 python3 val_model.py
 
 # 정적 이미지 한 장으로 빠르게 확인
 python3 test_image.py <이미지_경로> [best.pt 경로]
 ```
+
+검증이 끝나면 Git에 올릴 수 있는 요약 리포트가 `reports/validation/validation_report.md`와
+`reports/validation/validation_report.json`에 저장됩니다. Ultralytics가 생성하는 그래프와
+혼동행렬은 `runs/detect/val/` 아래에 저장됩니다.
 
 `best.pt`를 `robot_ws/src/robot_perception/` 하위(또는 원하는 절대경로)에 두면 ROS2 노드에서 그대로 씁니다.
 
