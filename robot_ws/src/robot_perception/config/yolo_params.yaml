@@ -14,8 +14,8 @@ yolo_detector_node:
     #   ros2 run robot_perception yolo_detector_node --ros-args -p model_path:=/abs/path/best.pt
     model_path: "best.pt"
 
-    # risk_db에 있는 기본 관심 클래스입니다.
-    # 여기에 없는 클래스라도 아래 small-object 로직에 걸리면 Level 2로 처리됩니다.
+    # 모델/risk_db class 이름 정합성 확인용 기본 위험 클래스입니다.
+    # 실제 action 판단은 risk_db와 아래 unknown-object 로직을 기준으로 합니다.
     target_classes: ["battery", "coin", "lego"]
 
     confidence_threshold: 0.3
@@ -31,13 +31,20 @@ yolo_detector_node:
     # 로봇에 디스플레이가 없는 headless 환경에서는 false로 두세요 (cv2.imshow가 DISPLAY 필요).
     enable_visualization: true
 
-    # risk_db에 없는 클래스라도 bbox 면적이 battery/coin/lego 기준 bbox보다 작으면
-    # unknown_small_object로 간주해 Level 2(REMOVE, 입 근접 시 ALARM)로 처리합니다.
-    enable_unknown_small_object_risk: true
+    # risk_db에 없는 클래스는 두 단계로만 추가 분류합니다.
+    # 1) bbox가 battery/coin/lego 기준 bbox보다 작으면 unknown_small_object(Level 2)
+    # 2) 위 기준에 걸리지 않고 아이 입 크기보다 크면 unknown_large_object(Level 1, NONE)
+    enable_unknown_object_risk: true
     unknown_small_object_class_name: "unknown_small_object"
+    unknown_large_object_class_name: "unknown_large_object"
     small_object_reference_classes: ["battery", "coin", "lego"]
     small_object_reference_area_scale: 1.0
 
-    # 같은 프레임 안에서 기준 객체(battery/coin/lego)가 안 잡힌 경우의 보조 기준입니다.
+    # 같은 프레임 안에서 기준 객체(battery/coin/lego)가 안 잡힌 경우의 Level 2 보조 기준입니다.
     # 예: 0.035 = 전체 이미지 면적의 3.5% 이하이면 작은 미확인 물체로 간주.
     small_object_fallback_max_area_ratio: 0.035
+    mouth_size_area_scale: 1.0
+
+    # MediaPipe가 입꼬리 좌표를 못 잡은 경우의 Level 1 보조 입 크기 기준입니다.
+    # 예: 0.035 = 전체 이미지 면적의 3.5%를 임시 입 크기 bbox 면적으로 사용.
+    mouth_fallback_area_ratio: 0.035

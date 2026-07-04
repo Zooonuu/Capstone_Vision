@@ -44,4 +44,3 @@ def generate_launch_description():
         ekf,
         slam_toolbox_node,
     ])
-ROS2 팀원은 이 점수를

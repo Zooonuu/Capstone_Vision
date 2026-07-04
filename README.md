@@ -2,7 +2,7 @@
 
 2026 창의융합 캡스톤디자인 팀 **막아줘 영(Young)** 의 비전/ROS2 작업 공간입니다.
 
-기준일: **2026.07.03**
+기준일: **2026.07.04**
 
 ## 프로젝트 목표
 
@@ -93,33 +93,39 @@ vision/detected_objects  (std_msgs/String, JSON payload)
 | class | level | 일반 action | 입 근접 action | 의미 |
 |---|---:|---|---|---|
 | `battery` | 3 | `REMOVE` | `EMERGENCY_STOP` | 고위험. 즉시 제거/긴급 대응 |
-| `coin` | 2 | `REMOVE` | `ALARM` | 주의. 수거 필요 |
-| `lego` | 2 | `REMOVE` | `ALARM` | 주의. 수거 필요 |
-| `unknown_small_object` | 2 | `REMOVE` | `ALARM` | 작은 미확인 물체. 삼킴 가능성으로 주의 처리 |
+| `coin` | 2 | `REMOVE` | `EMERGENCY_STOP` | 주의. 수거 필요. 입 근접 시 즉시 정지 |
+| `lego` | 2 | `REMOVE` | `EMERGENCY_STOP` | 주의. 수거 필요. 입 근접 시 즉시 정지 |
+| `unknown_small_object` | 2 | `REMOVE` | `EMERGENCY_STOP` | 기존 소형 위험물 bbox보다 작은 미확인 물체. 삼킴 가능성으로 주의 처리 |
+| `unknown_large_object` | 1 | `NONE` | `NONE` | 입 크기보다 큰 미확인 물체. 별도 action 없이 인식만 수행 |
 
-2026.07.03 기준으로 `battery/coin/lego` 외에도, YOLO가 검출한 미확인 객체의 bbox가 충분히 작으면
-`unknown_small_object`로 간주해 Level 2로 격상하는 로직을 추가했습니다.
+2026.07.04 기준으로 `battery/coin/lego` 같은 DB 등록 물체는 기존 위험도를 그대로 사용합니다.
+DB에 없는 미확인 객체만 bbox 크기로 추가 분류합니다.
 
-### 3. 작은 미확인 물체 Level 2 격상
+### 3. DB 밖 미확인 물체 bbox 분류
 
 아이의 입에 들어갈 수 있는 물체가 동전/배터리/레고만은 아니므로, 현재 노드는 다음 기준을 사용합니다.
 
 ```text
 1. battery/coin/lego는 risk_db의 기존 위험도대로 처리
 2. risk_db에 없는 클래스도 일단 bbox 면적을 계산
-3. 같은 프레임에 잡힌 battery/coin/lego bbox 면적보다 작거나 같으면 unknown_small_object로 처리
-4. 같은 프레임에 기준 객체가 없으면 이미지 전체 면적 대비 fallback ratio로 판단
-5. unknown_small_object는 Level 2, REMOVE, 입 근접 시 ALARM
+3. bbox가 같은 프레임의 battery/coin/lego 기준 bbox보다 작거나 같으면 unknown_small_object, Level 2, REMOVE
+4. 같은 프레임에 기준 객체가 없으면 이미지 전체 면적 대비 small-object fallback ratio로 Level 2 여부 판단
+5. Level 2 기준에 걸리지 않은 미확인 객체 중 bbox가 아이 입 크기보다 크면 unknown_large_object, Level 1, NONE
+6. MediaPipe가 입을 못 잡으면 이미지 전체 면적 대비 mouth fallback ratio를 임시 입 크기로 사용
+7. 위 두 조건에 모두 걸리지 않은 DB 밖 객체는 위험도 DB 대상으로 발행하지 않음
 ```
 
 관련 파라미터:
 
 ```yaml
-enable_unknown_small_object_risk: true
+enable_unknown_object_risk: true
 unknown_small_object_class_name: "unknown_small_object"
+unknown_large_object_class_name: "unknown_large_object"
 small_object_reference_classes: ["battery", "coin", "lego"]
 small_object_reference_area_scale: 1.0
 small_object_fallback_max_area_ratio: 0.035
+mouth_size_area_scale: 1.0
+mouth_fallback_area_ratio: 0.035
 ```
 
 주의: 이 로직은 **YOLO가 bbox를 만든 객체**에 대해서만 작동합니다. YOLO가 아예 검출하지 못한 물체는
@@ -141,11 +147,11 @@ bbox가 없으므로 크기 비교도 할 수 없습니다.
 
 ```text
 dynamic_priority = base_level + 10
-robot_action = mouth_action_cmd
+robot_action = EMERGENCY_STOP
 ```
 
-예를 들어 Level 2 레고 또는 작은 미확인 물체가 입 근처에 있으면 `ALARM`으로 바뀝니다.
-Level 3 배터리는 입 근처에서 `EMERGENCY_STOP`으로 바뀝니다.
+Level 2 이상의 모든 DB 물체는 입 근처에 있으면 `EMERGENCY_STOP`으로 바뀝니다.
+Level 1인 `unknown_large_object`는 입 근접 상황에서도 action 없이 인식만 유지합니다.
 
 ### 5. SLAM/Localization 골격
 
@@ -186,18 +192,16 @@ slam_toolbox /pose + /odometry/filtered -> ekf_filter_node_map -> map -> odom
 | 1 | 알람 인터페이스 | `ALARM`, `EMERGENCY_STOP`을 실제 부저/앱/로그/토픽으로 연결 | ROS2팀 |
 | 1 | 수거 장치 제어 인터페이스 | `REMOVE` 명령을 스위핑/흡입/격리 수납함 구동으로 연결 | ROS2팀 + 기구팀 |
 | 1 | 전체 launch 파일 | 카메라, 비전, SLAM, navigation, actuator, alarm을 한 번에 실행 | ROS2팀 |
-| 1 | 실환경 threshold 튜닝 | `mouth_threshold_px`, small-object bbox 기준을 실제 카메라 각도에서 보정 | 기존 비전팀 + ROS2팀 |
+| 1 | 실환경 threshold 튜닝 | `mouth_threshold_px`, small-object bbox 기준, 입 크기 기반 Level 1 기준을 실제 카메라 각도에서 보정 | 기존 비전팀 + ROS2팀 |
 
 ### 현재 코드에서 바로 확인해야 할 리스크
 
 1. `data.yaml`은 현재 레고 세부 클래스 23개입니다. 최종 모델이 `battery/coin/lego`를 내보내지 않으면
    `risk_db.py`와 위험도 로직이 맞지 않습니다.
-2. `robot_slam/launch/slam_mapping.launch.py` 끝에 코드가 아닌 문장이 남아 있습니다. 빌드는 될 수 있어도
-   실제 launch 시 Python 문법 오류가 날 가능성이 있습니다.
-3. `setup.cfg`의 `script-dir`, `install-scripts`는 Jazzy 빌드에서 deprecation warning을 냅니다.
+2. `setup.cfg`의 `script-dir`, `install-scripts`는 Jazzy 빌드에서 deprecation warning을 냅니다.
    지금은 빌드 실패는 아니지만 `script_dir`, `install_scripts`로 바꾸는 것이 좋습니다.
-4. 현재 repo에는 `ground_projection_node`, `robot_navigation`, `goal_manager`, 실제 수거 장치 제어 노드가 없습니다.
-5. MediaPipe 입/손 판단은 카메라가 아이 얼굴을 볼 수 있어야 잘 작동합니다. 로봇 상단 카메라가 바닥을 향하면
+3. 현재 repo에는 `ground_projection_node`, `robot_navigation`, `goal_manager`, 실제 수거 장치 제어 노드가 없습니다.
+4. MediaPipe 입/손 판단은 카메라가 아이 얼굴을 볼 수 있어야 잘 작동합니다. 로봇 상단 카메라가 바닥을 향하면
    입 랜드마크 검출률이 낮을 수 있습니다.
 
 ## 팀별 역할 구분
@@ -212,7 +216,7 @@ slam_toolbox /pose + /odometry/filtered -> ekf_filter_node_map -> map -> odom
 2. `battery`, `coin`, `lego`, 추가 위험물 클래스 라벨링
 3. `data.yaml` class 이름과 `risk_db.py` class 이름 일치
 4. YOLO 학습, 검증, mAP/Precision/Recall 관리
-5. 작은 미확인 물체 bbox 기준 튜닝
+5. 기존 소형 위험물 bbox 및 입 크기 기반 미확인 물체 기준 튜닝
 6. `mouth_threshold_px`와 손-입 근접 조건 튜닝
 7. 오탐/미탐 이미지 수집 및 재학습 루프 구축
 8. `vision/detected_objects` JSON 필드 정의와 유지
@@ -337,7 +341,7 @@ End-to-end detection latency
 
 ### 2. 작은 미확인 물체 탐지 고도화
 
-현재 small-object 로직은 YOLO가 검출한 bbox만 대상으로 합니다. 더 강하게 만들려면 다음을 추가할 수 있습니다.
+현재 unknown-object 로직은 YOLO가 검출한 bbox만 대상으로 합니다. 더 강하게 만들려면 다음을 추가할 수 있습니다.
 
 1. YOLO segmentation 모델로 작은 물체 mask 추출
 2. 배경 차분/바닥 평면 모델로 “바닥 위 작은 신규 물체” 감지
@@ -417,7 +421,7 @@ priority =
 2. `best.pt`, `data.yaml`, `risk_db.py`, `target_classes` 정합성 확인
 3. `/image_raw -> yolo_detector_node -> /detections` 실환경 테스트
 4. `vision/detected_objects` JSON 샘플 저장
-5. 작은 미확인 물체 Level 2 로직 threshold 튜닝
+5. small-object Level 2 기준과 입 크기 기반 Level 1 기준 threshold 튜닝
 
 ### Phase 2: 좌표 변환과 목표 생성
 
@@ -490,6 +494,14 @@ colcon build --packages-select robot_perception robot_perception_msgs
 5. 작은 미확인 물체를 bbox 기준으로 Level 2 처리하는 로직 추가
 6. `unknown_small_object` 위험도 DB 항목 추가
 7. 계획서 대비 미구현 기능과 팀별 역할 정리
+
+## 2026.07.04 업데이트 요약
+
+1. 위험도 DB의 Level 2 이상 물체는 입 근접 시 모두 `EMERGENCY_STOP`으로 통일
+2. 미등록 객체 중 기존 소형 위험물 bbox 기준 이하는 `unknown_small_object`로 분류
+3. `unknown_small_object`는 Level 2, `REMOVE`, 입 근접 시 `EMERGENCY_STOP` 처리
+4. 미등록 객체 중 아이 입 크기보다 큰 bbox는 `unknown_large_object` Level 1, `NONE`으로 등록해 별도 action 없이 인식만 수행
+5. `vision/detected_objects` JSON에 입 크기 추정 기준과 unknown 분류 결과를 포함
 
 ## 다음 회의 체크리스트
 

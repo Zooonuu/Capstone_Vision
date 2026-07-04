@@ -17,6 +17,8 @@
   - battery/coin/lego는 risk_db.py의 기존 위험도 그대로 처리합니다.
   - risk_db.py에 없는 클래스라도 bbox가 battery/coin/lego 기준 bbox보다 작으면
     unknown_small_object로 간주해 Level 2 위험도로 처리합니다.
+  - 위 Level 2 기준에 걸리지 않은 미확인 객체 중 아이 입 크기보다 큰 bbox는
+    unknown_large_object(Level 1, NONE)로 인식만 합니다.
 
 주의: 이 로봇의 웹캠은 로봇 최상단에서 지면을 향해 아래로 틸트되어 장착됩니다
 (robot_slam/README.md, config/camera_extrinsics.yaml 참고). 원본 코드는 사람 얼굴이
@@ -68,11 +70,14 @@ class YoloDetectorNode(Node):
         self.declare_parameter('mouth_threshold_px', 120)
         self.declare_parameter('enable_pose_risk_scoring', True)
         self.declare_parameter('enable_visualization', True)
-        self.declare_parameter('enable_unknown_small_object_risk', True)
+        self.declare_parameter('enable_unknown_object_risk', True)
         self.declare_parameter('unknown_small_object_class_name', 'unknown_small_object')
+        self.declare_parameter('unknown_large_object_class_name', 'unknown_large_object')
         self.declare_parameter('small_object_reference_classes', ['battery', 'coin', 'lego'])
         self.declare_parameter('small_object_reference_area_scale', 1.0)
         self.declare_parameter('small_object_fallback_max_area_ratio', 0.035)
+        self.declare_parameter('mouth_size_area_scale', 1.0)
+        self.declare_parameter('mouth_fallback_area_ratio', 0.035)
 
         image_topic = self.get_parameter('image_topic').value
         detections_topic = self.get_parameter('detections_topic').value
@@ -87,10 +92,12 @@ class YoloDetectorNode(Node):
         self.mouth_threshold_px = int(self.get_parameter('mouth_threshold_px').value)
         self.enable_pose_risk_scoring = bool(self.get_parameter('enable_pose_risk_scoring').value)
         self.enable_visualization = bool(self.get_parameter('enable_visualization').value)
-        self.enable_unknown_small_object_risk = bool(
-            self.get_parameter('enable_unknown_small_object_risk').value)
+        self.enable_unknown_object_risk = bool(
+            self.get_parameter('enable_unknown_object_risk').value)
         self.unknown_small_object_class_name = (
             self.get_parameter('unknown_small_object_class_name').value.lower())
+        self.unknown_large_object_class_name = (
+            self.get_parameter('unknown_large_object_class_name').value.lower())
         self.small_object_reference_classes = {
             c.lower() for c in self.get_parameter('small_object_reference_classes').value
         }
@@ -98,6 +105,9 @@ class YoloDetectorNode(Node):
             self.get_parameter('small_object_reference_area_scale').value)
         self.small_object_fallback_max_area_ratio = float(
             self.get_parameter('small_object_fallback_max_area_ratio').value)
+        self.mouth_size_area_scale = float(self.get_parameter('mouth_size_area_scale').value)
+        self.mouth_fallback_area_ratio = float(
+            self.get_parameter('mouth_fallback_area_ratio').value)
 
         if YOLO is None:
             raise RuntimeError(
@@ -106,7 +116,7 @@ class YoloDetectorNode(Node):
         self.get_logger().info(f'YOLO11 모델 로드 중... ("{model_path}", device={self.device})')
         self.model = YOLO(model_path)
         self.get_logger().info(
-            f'모델 로드 완료. class filter={sorted(self.target_classes)}, '
+            f'모델 로드 완료. target_classes={sorted(self.target_classes)}, '
             f'conf_threshold={self.confidence_threshold}')
 
         self.mp_pose = None
@@ -143,10 +153,16 @@ class YoloDetectorNode(Node):
         """bbox의 픽셀 면적을 계산합니다."""
         return max(0, x2 - x1) * max(0, y2 - y1)
 
+    def _mouth_area_threshold(self, mouth_width_px, frame_area):
+        """입꼬리 간 거리로 미확인 객체 분류용 입 크기 면적 기준을 계산합니다."""
+        if mouth_width_px and mouth_width_px > 0:
+            return (mouth_width_px ** 2) * self.mouth_size_area_scale, "mediapipe_mouth"
+        if frame_area > 0 and self.mouth_fallback_area_ratio > 0:
+            return frame_area * self.mouth_fallback_area_ratio, "fallback_area_ratio"
+        return None, "unavailable"
+
     def _is_unknown_small_object(self, bbox_area, frame_area, reference_areas):
-        """미확인 객체 bbox가 삼킴 가능 크기 기준에 들어오는지 판단합니다."""
-        if not self.enable_unknown_small_object_risk:
-            return False
+        """미등록 객체 bbox가 기존 소형 위험물 기준보다 작은지 판단합니다."""
         if bbox_area <= 0 or frame_area <= 0:
             return False
 
@@ -156,6 +172,23 @@ class YoloDetectorNode(Node):
 
         area_ratio = bbox_area / frame_area
         return area_ratio <= self.small_object_fallback_max_area_ratio
+
+    def _unknown_object_risk_class(self, bbox_area, frame_area, reference_areas,
+                                   mouth_area_threshold):
+        """미등록 객체를 기존 소형 위험물 기준과 입 크기 기준으로 DB 항목에 매핑합니다."""
+        if not self.enable_unknown_object_risk:
+            return None
+        if bbox_area <= 0:
+            return None
+
+        if self._is_unknown_small_object(bbox_area, frame_area, reference_areas):
+            return self.unknown_small_object_class_name
+
+        if mouth_area_threshold is None:
+            return None
+        if bbox_area > mouth_area_threshold:
+            return self.unknown_large_object_class_name
+        return None
 
     def _image_callback(self, msg: Image):
         now = time.monotonic()
@@ -173,6 +206,7 @@ class YoloDetectorNode(Node):
         # ================================================================
         hands = []
         mouth = None
+        mouth_width_px = None
         if self.pose is not None and cv2 is not None:
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             pose_results = self.pose.process(rgb_frame)
@@ -185,8 +219,11 @@ class YoloDetectorNode(Node):
 
                 m_left = landmarks[self.mp_pose.PoseLandmark.MOUTH_LEFT]
                 m_right = landmarks[self.mp_pose.PoseLandmark.MOUTH_RIGHT]
-                mouth = (int(((m_left.x + m_right.x) / 2) * w),
-                         int(((m_left.y + m_right.y) / 2) * h))
+                mouth_left = (int(m_left.x * w), int(m_left.y * h))
+                mouth_right = (int(m_right.x * w), int(m_right.y * h))
+                mouth = (int((mouth_left[0] + mouth_right[0]) / 2),
+                         int((mouth_left[1] + mouth_right[1]) / 2))
+                mouth_width_px = self._calculate_distance(mouth_left, mouth_right)
 
                 if self.enable_visualization:
                     self.mp_drawing.draw_landmarks(
@@ -202,6 +239,8 @@ class YoloDetectorNode(Node):
         legacy_objects = []        # -> vision/detected_objects (원본 호환 JSON payload)
         parsed_detections = []
         reference_areas = []
+        mouth_area_threshold, mouth_size_source = self._mouth_area_threshold(
+            mouth_width_px, frame_area)
 
         for result in results:
             for box in result.boxes:
@@ -238,20 +277,21 @@ class YoloDetectorNode(Node):
             risk_info = RISK_DATABASE.get(class_name)
             risk_class_name = class_name
             is_unknown_small_object = False
+            is_unknown_large_object = False
 
             if risk_info is None:
-                if not self._is_unknown_small_object(bbox_area, frame_area, reference_areas):
+                risk_class_name = self._unknown_object_risk_class(
+                    bbox_area, frame_area, reference_areas, mouth_area_threshold)
+                if risk_class_name is None:
                     continue
-                risk_info = RISK_DATABASE.get(self.unknown_small_object_class_name)
+                risk_info = RISK_DATABASE.get(risk_class_name)
                 if risk_info is None:
                     self.get_logger().warn(
-                        f'{self.unknown_small_object_class_name} 항목이 risk_db.py에 없습니다.',
+                        f'{risk_class_name} 항목이 risk_db.py에 없습니다.',
                         throttle_duration_sec=2.0)
                     continue
-                risk_class_name = self.unknown_small_object_class_name
-                is_unknown_small_object = True
-            elif self.target_classes and class_name not in self.target_classes:
-                continue
+                is_unknown_small_object = risk_class_name == self.unknown_small_object_class_name
+                is_unknown_large_object = risk_class_name == self.unknown_large_object_class_name
 
             pipeline_detections.append(Detection(
                 class_id=cls_id,
@@ -268,11 +308,17 @@ class YoloDetectorNode(Node):
 
             if is_unknown_small_object:
                 warning_msg = (
-                    f"작은 미확인 물체({class_name}) 감지. "
+                    f"기존 소형 위험물보다 작은 미확인 물체({class_name}) 감지. "
                     f"{risk_class_name} 기준 Lv{base_level}로 처리합니다.")
+            elif is_unknown_large_object:
+                warning_msg = (
+                    f"입 크기보다 큰 미확인 물체({class_name}) 감지. "
+                    f"{risk_class_name} 기준 Lv{base_level}, action={current_action}로 인식만 합니다.")
+                color = (0, 255, 0)
 
             # [예외처리] 인식률이 낮아(conf < 0.6) 형체가 애매한 경우 무조건 최소 Level 2 이상으로 간주
-            if conf < 0.6 and base_level < 2:
+            is_recognition_only = current_action == "NONE" and risk_info["mouth_action_cmd"] == "NONE"
+            if conf < 0.6 and base_level < 2 and not is_recognition_only:
                 base_level = 2
                 warning_msg = f"불확실성 높음: {class_name}을(를) Lv2로 상향 처리합니다."
 
@@ -297,9 +343,9 @@ class YoloDetectorNode(Node):
                     is_mouth_threat = True
 
             dynamic_priority = base_level
-            if is_mouth_threat:
+            if is_mouth_threat and base_level >= 2:
                 dynamic_priority += 10
-                current_action = risk_info["mouth_action_cmd"]
+                current_action = "EMERGENCY_STOP"
                 warning_msg = f"🚨 비상! {class_name} 삼킴 위험 감지!"
                 color = (0, 0, 255)
                 self.get_logger().warn(warning_msg)
@@ -313,6 +359,7 @@ class YoloDetectorNode(Node):
                 "class": class_name,
                 "risk_class": risk_class_name,
                 "is_unknown_small_object": is_unknown_small_object,
+                "is_unknown_large_object": is_unknown_large_object,
                 "confidence": round(conf, 2),
                 "base_level": base_level,
                 "dynamic_priority": dynamic_priority,
@@ -323,6 +370,12 @@ class YoloDetectorNode(Node):
                     "y2": y2,
                     "area": bbox_area,
                     "area_ratio": round(bbox_area / frame_area, 5) if frame_area else 0.0,
+                },
+                "mouth_size": {
+                    "estimated_width_px": round(mouth_width_px, 2) if mouth_width_px else None,
+                    "area_threshold_px": round(mouth_area_threshold, 2)
+                    if mouth_area_threshold else None,
+                    "source": mouth_size_source,
                 },
                 "center_coords": {"x": center_coords[0], "y": center_coords[1]},
                 "robot_action": current_action,

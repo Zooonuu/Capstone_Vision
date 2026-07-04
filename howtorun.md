@@ -52,7 +52,12 @@ ros2 run robot_perception yolo_detector_node --ros-args \
 | 파라미터 | 기본값 | 설명 |
 |---|---|---|
 | `model_path` | `best.pt` | 학습된 가중치 경로 (절대경로 권장) |
-| `target_classes` | `["battery", "coin", "lego"]` | `risk_db.py` 기준 관심 클래스 (자기 모델의 `model.names`와 맞춰야 함) |
+| `target_classes` | `["battery", "coin", "lego"]` | 모델/risk_db class 이름 정합성 확인용 기본 위험 클래스 |
+| `enable_unknown_object_risk` | `true` | DB에 없는 객체를 small-object Level 2 기준과 입 크기 기반 Level 1 기준으로 분류 |
+| `small_object_reference_classes` | `["battery", "coin", "lego"]` | 미등록 객체 Level 2 판정에 사용할 기존 소형 위험물 기준 클래스 |
+| `small_object_fallback_max_area_ratio` | `0.035` | 기준 클래스가 같은 프레임에 없을 때 사용할 Level 2 보조 bbox 면적 비율 |
+| `mouth_size_area_scale` | `1.0` | MediaPipe 입꼬리 거리로 추정한 입 크기 bbox 면적 보정값 |
+| `mouth_fallback_area_ratio` | `0.035` | 입 좌표를 못 잡았을 때 사용할 Level 1 보조 입 크기 기준 |
 | `device` | `cpu` | GPU 사용 시 `"0"` 등으로 변경 |
 | `enable_visualization` | `true` | headless 환경(디스플레이 없음)이면 `false`로 설정 |
 
