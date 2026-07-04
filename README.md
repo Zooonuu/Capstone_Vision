@@ -503,6 +503,36 @@ colcon build --packages-select robot_perception robot_perception_msgs
 4. 미등록 객체 중 아이 입 크기보다 큰 bbox는 `unknown_large_object` Level 1, `NONE`으로 등록해 별도 action 없이 인식만 수행
 5. `vision/detected_objects` JSON에 입 크기 추정 기준과 unknown 분류 결과를 포함
 
+## 카메라 높이 변경 시 튜닝 메모
+
+아직 실제 카메라 높이와 장착각이 정해지지 않았으므로, 현재 코드는 카메라 높이를 직접 입력받아
+계산하지 않습니다. 다만 카메라를 높여 아이의 입/손과 바닥 대부분이 함께 보이도록 바꾸면
+아래 항목은 실험 후 조정해야 합니다.
+
+1. `mouth_threshold_px`
+   - 입 중심과 손/물체 중심이 얼마나 가까우면 삼킴 위험으로 볼지 정하는 픽셀 거리입니다.
+   - 카메라가 높아지면 같은 실제 거리도 화면에서는 더 작은 픽셀 거리로 보일 수 있으므로,
+     기본값 `120`이 너무 크거나 작지 않은지 실측해야 합니다.
+2. `mouth_size_area_scale`, `mouth_fallback_area_ratio`
+   - `unknown_large_object` Level 1 판정에 쓰는 아이 입 크기 추정값입니다.
+   - MediaPipe가 입꼬리 좌표를 안정적으로 잡으면 `mouth_size_area_scale`을 조정하고,
+     입을 못 잡는 각도/가림 상황이 많으면 `mouth_fallback_area_ratio`를 별도로 보정해야 합니다.
+3. `small_object_reference_area_scale`, `small_object_fallback_max_area_ratio`
+   - DB 밖 작은 물체를 Level 2로 올리는 bbox 면적 기준입니다.
+   - 카메라 높이가 바뀌면 모든 물체 bbox 면적이 달라지므로 기존 `battery/coin/lego` 기준과
+     fallback ratio가 실제 삼킴 가능 크기를 잘 반영하는지 다시 확인해야 합니다.
+4. `enable_pose_risk_scoring`
+   - 높은 위치에서도 MediaPipe가 아이의 입/손을 안정적으로 잡으면 `true`를 유지합니다.
+   - 바닥은 잘 보이지만 얼굴/손 landmark가 불안정하면, 별도 아이 관찰 카메라를 두거나
+     입-손 근접 판단을 분리하는 설계를 검토해야 합니다.
+5. 카메라 보정값
+   - bbox를 지도/지면 좌표로 바꾸는 단계가 추가되면 카메라 높이, 틸트각, intrinsic/extrinsic 보정값이
+     필요합니다. 현재 `yolo_detector_node.py`는 픽셀 bbox만 발행하고 실제 지면 좌표 변환은
+     아직 별도 `ground_projection_node` 구현 대상입니다.
+
+실험 순서는 `enable_visualization: true`로 화면을 보면서 입/손 landmark가 안정적으로 잡히는지 확인한 뒤,
+`mouth_threshold_px`, small-object bbox 기준, Level 1 입 크기 기준을 차례대로 조정하는 방식이 좋습니다.
+
 ## 다음 회의 체크리스트
 
 1. 최종 모델 class 이름을 `battery/coin/lego`로 갈지, 세부 class로 갈지 결정
