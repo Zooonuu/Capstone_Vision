@@ -1,0 +1,22 @@
+{
+  "generated_at": "2026-07-04T16:15:00",
+  "model_path": "best.pt",
+  "data_path": "data.yaml",
+  "save_dir": "runs/detect/val",
+  "report_dir": "reports/validation",
+  "class_count": 23,
+  "metrics": {
+    "precision": 46.17,
+    "recall": 53.51,
+    "map50": 57.41,
+    "map50_95": 48.52
+  },
+  "artifacts": {
+    "confusion_matrix.png": "runs/detect/val/confusion_matrix.png",
+    "confusion_matrix_normalized.png": "runs/detect/val/confusion_matrix_normalized.png",
+    "BoxPR_curve.png": "runs/detect/val/BoxPR_curve.png",
+    "BoxF1_curve.png": "runs/detect/val/BoxF1_curve.png",
+    "BoxP_curve.png": "runs/detect/val/BoxP_curve.png",
+    "BoxR_curve.png": "runs/detect/val/BoxR_curve.png"
+  }
+}
