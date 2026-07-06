@@ -100,16 +100,17 @@ reason_codes
 
 ### 1-1. 모델 class와 위험 class 매핑
 
-현재 `data.yaml`은 레고 세부 클래스 23개를 사용합니다. 안전 판단에서는 이 세부 클래스를
-모두 상위 위험 클래스 `lego`로 변환합니다.
+최종 학습/라벨링 정책은 레고 세부 부품 class가 아니라 상위 class `lego` 하나로 통일합니다.
+다만 현재 `data.yaml`과 기존 `best.pt`는 레고 세부 클래스 23개 기준이므로, 안전 판단에서는
+이 세부 클래스를 모두 상위 위험 클래스 `lego`로 변환합니다.
 
 ```text
 C1x1x1, C2x1x0, ... Z1x1x1 -> lego
 ```
 
-이 매핑은 `risk_db.py`의 `DEFAULT_CLASS_ALIASES`와
+이 매핑은 기존 23-class 모델과의 호환을 위한 장치이며, `risk_db.py`의 `DEFAULT_CLASS_ALIASES`와
 `robot_ws/src/robot_perception/config/yolo_params.yaml`의 `class_aliases`에 정리되어 있습니다.
-따라서 모델은 레고 모양을 세밀하게 구분하더라도, 로봇 행동 판단은
+따라서 현재 모델이 레고 모양을 세밀하게 구분하더라도, 로봇 행동 판단은
 `battery`/`coin`/`lego`라는 발표용 상위 위험 class 기준으로 통일됩니다.
 
 ### 2. 위험도 DB
@@ -247,7 +248,7 @@ slam_toolbox /pose + /odometry/filtered -> ekf_filter_node_map -> map -> odom
 |---|---|---|
 | YOLO 탐지 노드 | `/image_raw` 입력을 받아 YOLO 추론 후 `/detections`, `vision/detected_objects` 발행 | `robot_ws/src/robot_perception/robot_perception/yolo_detector_node.py` |
 | 위험도 DB | `battery`, `coin`, `lego`, `unknown_small_object`, `unknown_large_object` 위험도 등록 | `risk_db.py`, `robot_ws/src/robot_perception/robot_perception/risk_db.py` |
-| class alias | 레고 세부 class 23개를 상위 위험 class `lego`로 매핑 | `data.yaml`, `risk_db.py`, `yolo_params.yaml` |
+| class 정책 | 최종 학습/라벨링은 `lego` 단일 class로 통일, 기존 23-class 모델은 alias로 `lego`에 매핑 | `data.yaml`, `risk_db.py`, `yolo_params.yaml` |
 | 미확인 물체 판단 | DB 밖 객체를 bbox 크기와 입 크기 기준으로 Level 2 또는 Level 1로 분류 | `yolo_detector_node.py` |
 | 입-손-물체 근접 판단 | 손이 bbox 안에 있고 입에 가까워지거나, 물체 중심이 입에 가까우면 `EMERGENCY_STOP` | `yolo_detector_node.py` |
 | 시간축 안정화 | 일반 `REMOVE`는 연속 프레임 확인 후 확정, 입 근접 긴급정지는 즉시 발행 | `yolo_detector_node.py` |
@@ -256,8 +257,8 @@ slam_toolbox /pose + /odometry/filtered -> ekf_filter_node_map -> map -> odom
 
 ### 현재 코드에서 바로 확인해야 할 리스크
 
-1. `data.yaml`은 레고 세부 클래스 23개입니다. 코드에서는 alias로 `lego`에 매핑하지만,
-   현재 검증 리포트 기준으로 `battery`, `coin`은 모델 class에 없습니다.
+1. 현재 `data.yaml`은 레고 세부 클래스 23개입니다. 최종 학습/라벨링 정책은 `lego` 단일 class지만,
+   아직 현재 검증 리포트 기준으로 `battery`, `coin`은 모델 class에 없습니다.
 2. `robot_perception/package.xml`과 `setup.py` 설명에는 ground projection까지 언급되어 있지만,
    실제 repo에는 아직 `ground_projection_node`가 없습니다.
 3. MediaPipe 입/손 판단은 카메라가 아이 얼굴과 손을 볼 수 있어야 잘 작동합니다. 로봇 카메라가 바닥을 향하면
@@ -372,13 +373,12 @@ colcon build --packages-select robot_perception robot_perception_msgs
 | 우선순위 | Task | 목적 | 완료 기준 |
 |---:|---|---|---|
 | 1 | 최종 모델 class 검증 | 현재 `data.yaml`은 레고 23개 class만 있음. 최종 `best.pt`가 `battery`, `coin`, `lego`를 실제로 검출하는지 확인 | `battery`/`coin`/`lego` 테스트 이미지 또는 영상 결과표 작성 |
-| 1 | class alias 정책 확정 | 세부 class 유지 후 alias 매핑할지, 최종 학습 단계에서 상위 class로 합칠지 결정 | `data.yaml`, `DEFAULT_CLASS_ALIASES`, `yolo_params.yaml`, `risk_db.py` class 표 정리 |
-| 1 | confidence threshold 튜닝 | 오탐/미탐 균형 조정 | 0.2, 0.3, 0.4, 0.5 비교표와 최종 threshold 1개 확정 |
+| 1 | confidence threshold 튜닝 | 오탐/미탐 균형 조정 | `reports/validation/lego_confidence_threshold_plan.md`에 0.2, 0.3, 0.4, 0.5 비교 결과 작성 |
 | 1 | small-object 기준 튜닝 | `unknown_small_object`가 너무 많이/적게 나오지 않게 조정 | `small_object_reference_area_scale`, `small_object_fallback_max_area_ratio` 실험표 작성 |
 | 1 | 입 근접 기준 튜닝 | 실제 카메라 각도에서 `EMERGENCY_STOP` 오탐/미탐 줄이기 | `mouth_threshold_scale`, `mouth_min_threshold_px`, `mouth_max_threshold_px` 최종값 기록 |
 | 1 | 실제 카메라 각도별 입/손 검출률 측정 | 카메라 높이와 각도에 따라 MediaPipe 입/손 landmark가 안정적인지 확인 | 각도별 검출 성공률과 실패 케이스 정리 |
 | 1 | 시간축 안정화 기준 튜닝 | 한 프레임 오탐으로 `REMOVE`가 나가지 않게 조정 | `stable_detection_frames`, `track_iou_threshold`, `lost_track_ttl_frames` 비교 결과 작성 |
-| 2 | 판단 로직 단위 테스트 설계 | YOLO 없이 class/bbox/mouth/hands 가짜 입력으로 위험 판단만 검증 | alias, unknown object, stable track, mouth proximity 테스트 케이스 목록 작성 |
+| 2 | 판단 로직 단위 테스트 설계 | YOLO 없이 class/bbox/mouth/hands 가짜 입력으로 위험 판단만 검증 | `robot_ws/src/robot_perception/scripts/risk_logic_unit_check.py` 실행 결과 확인 |
 | 2 | 위험 이벤트 로그/리플레이 설계 | 나중에 오탐/미탐을 분석할 수 있게 frame, bbox, reason_codes 저장 | `REMOVE`/`EMERGENCY_STOP` 발생 시 저장할 JSONL 필드와 snapshot 규칙 정의 |
 | 2 | 안전 평가표 작성 | mAP와 별도로 안전 행동 정확도 평가 | `risk_class_mapping_accuracy`, `top_priority_target_accuracy`, 긴급정지 오탐/미탐 표 작성 |
 | 2 | 최종 시연/발표 지표 확정 | 레고 탐지, 배터리/동전 검출, 입 근접 긴급정지, 수거 후 재탐지 중 가능한 범위를 정리 | 시연 시나리오와 모델 정확도/안전 행동 정확도 발표 지표 분리 |
