@@ -254,17 +254,6 @@ slam_toolbox /pose + /odometry/filtered -> ekf_filter_node_map -> map -> odom
 | 판단 근거 출력 | `risk_score`, `reason_codes`, `robot_action`을 구조화 메시지와 JSON에 포함 | `Detection.msg`, `yolo_detector_node.py` |
 | 검증 리포트 틀 | mAP/Precision/Recall, Safety Mapping, Safety Evaluation Protocol 저장 | `val_model.py`, `reports/validation/validation_report.md` |
 
-### 아직 없는 기능
-
-| 기능 | 현재 상태 | 주 담당 |
-|---|---|---|
-| 실제 카메라 입력 확정 | `/image_raw`를 안정적으로 발행하는 카메라 bringup 노드/launch가 repo에 없음 | ROS2팀 |
-| bbox -> 지면 좌표 변환 | `ground_projection_node`가 아직 없음. 현재 `/detections`는 픽셀 bbox 기준 | ROS2팀 + 비전팀 |
-| target manager | `risk_score`와 지도 좌표를 이용해 최종 목표 1개를 고르는 노드가 없음 | ROS2팀 |
-| 알람/긴급정지 인터페이스 | `EMERGENCY_STOP`을 실제 부저, 앱, 로그, 제어 토픽으로 연결하는 노드가 없음 | ROS2팀 |
-| 수거 장치 제어 | `REMOVE`를 스위핑/흡입/격리 수납함 구동으로 연결하는 노드가 없음 | ROS2팀 + 기구팀 |
-| 전체 bringup launch | 카메라, 비전, SLAM, 주행, 알람, 수거 장치를 한 번에 실행하는 launch가 없음 | ROS2팀 |
-
 ### 현재 코드에서 바로 확인해야 할 리스크
 
 1. `data.yaml`은 레고 세부 클래스 23개입니다. 코드에서는 alias로 `lego`에 매핑하지만,
@@ -374,6 +363,8 @@ colcon build --packages-select robot_perception robot_perception_msgs
 
 ## 앞으로 해야 할 Todo
 
+아직 repo에 없는 기능과 남은 검증 작업은 아래처럼 비전팀 Todo와 ROS2팀 Todo 두 항목으로만 관리합니다.
+
 ### 비전팀 Todo
 
 이미지 추가 수집만이 아니라, 현재 구현된 모델/판단 로직을 더 믿을 수 있게 만드는 작업입니다.
@@ -385,10 +376,12 @@ colcon build --packages-select robot_perception robot_perception_msgs
 | 1 | confidence threshold 튜닝 | 오탐/미탐 균형 조정 | 0.2, 0.3, 0.4, 0.5 비교표와 최종 threshold 1개 확정 |
 | 1 | small-object 기준 튜닝 | `unknown_small_object`가 너무 많이/적게 나오지 않게 조정 | `small_object_reference_area_scale`, `small_object_fallback_max_area_ratio` 실험표 작성 |
 | 1 | 입 근접 기준 튜닝 | 실제 카메라 각도에서 `EMERGENCY_STOP` 오탐/미탐 줄이기 | `mouth_threshold_scale`, `mouth_min_threshold_px`, `mouth_max_threshold_px` 최종값 기록 |
+| 1 | 실제 카메라 각도별 입/손 검출률 측정 | 카메라 높이와 각도에 따라 MediaPipe 입/손 landmark가 안정적인지 확인 | 각도별 검출 성공률과 실패 케이스 정리 |
 | 1 | 시간축 안정화 기준 튜닝 | 한 프레임 오탐으로 `REMOVE`가 나가지 않게 조정 | `stable_detection_frames`, `track_iou_threshold`, `lost_track_ttl_frames` 비교 결과 작성 |
 | 2 | 판단 로직 단위 테스트 설계 | YOLO 없이 class/bbox/mouth/hands 가짜 입력으로 위험 판단만 검증 | alias, unknown object, stable track, mouth proximity 테스트 케이스 목록 작성 |
 | 2 | 위험 이벤트 로그/리플레이 설계 | 나중에 오탐/미탐을 분석할 수 있게 frame, bbox, reason_codes 저장 | `REMOVE`/`EMERGENCY_STOP` 발생 시 저장할 JSONL 필드와 snapshot 규칙 정의 |
 | 2 | 안전 평가표 작성 | mAP와 별도로 안전 행동 정확도 평가 | `risk_class_mapping_accuracy`, `top_priority_target_accuracy`, 긴급정지 오탐/미탐 표 작성 |
+| 2 | 최종 시연/발표 지표 확정 | 레고 탐지, 배터리/동전 검출, 입 근접 긴급정지, 수거 후 재탐지 중 가능한 범위를 정리 | 시연 시나리오와 모델 정확도/안전 행동 정확도 발표 지표 분리 |
 | 2 | 추적 로직 개선 검토 | IoU 추적이 부족하면 ID 유지와 smoothing 강화 | ByteTrack/SORT 적용 필요 여부와 현재 IoU 방식 한계 정리 |
 | 3 | 추론 속도 최적화 | 로봇 실시간 실행 가능성 확인 | CPU/GPU FPS, `inference_rate_hz`, `enable_visualization: false`, YOLO11n/s 비교표 작성 |
 | 3 | 실제 크기 기반 판단 검증 | 픽셀 bbox 면적은 거리 영향을 받으므로 지면 투영 후 cm 기준 판단 가능성 확인 | ROS2팀 `ground_projection_node` 결과로 bbox 실제 크기 근사 검증 |
@@ -403,17 +396,10 @@ colcon build --packages-select robot_perception robot_perception_msgs
 | 1 | 카메라 장치 노출 확인 | `/dev/video*`가 없으면 YOLO 이전 단계에서 실패함 | `ls /dev/video*`, `v4l2-ctl --list-devices`, 권한/WSL/Docker/VM 여부 확인 |
 | 1 | `/detections` 구독 확인 | JSON 대신 구조화 메시지로 후속 노드 연결 | `DetectionArray` 샘플 메시지 3개 이상 저장 |
 | 1 | `ground_projection_node` 구현 | 픽셀 bbox를 `base_link` 또는 `map` 좌표로 변환 | `/detections` 입력, `/safety_targets` 출력, 카메라 intrinsic/extrinsic 사용 |
-| 1 | target manager 구현 | 여러 위험물 중 처리할 목표 1개 선택 | `risk_score`, 거리, 중복 target 제거 기준으로 목표 발행 |
+| 1 | target manager 구현 | 여러 위험물 중 처리할 목표 1개 선택 | `risk_score`, 로봇 거리, 접근 가능성, 중복 target 제거 기준으로 목표 발행 |
 | 1 | 알람/긴급정지 노드 구현 | `EMERGENCY_STOP`을 실제 행동으로 연결 | 부저, LED, 앱, 로그, 제어 토픽 중 최소 1개 작동 |
 | 1 | 수거 장치 제어 인터페이스 | `REMOVE`를 실제 수거 동작으로 연결 | 수거 시작/성공/실패 토픽 또는 action/service 계약 정의 |
 | 2 | 전체 launch 구성 | 카메라, 비전, SLAM, target manager, 알람, 수거 노드 동시 실행 | `full_pipeline.launch.py` 또는 bringup launch 작성 |
 | 2 | TF/카메라 실측 반영 | 지도 좌표 변환 정확도 확보 | `base_link -> camera_link`, 카메라 높이, 틸트각, 라이다 위치 실측값 반영 |
 | 2 | Nav2 또는 자체 주행 연결 | 위험물 위치까지 접근 | `/safety_targets`를 navigation goal로 변환하고 접근 pose 생성 |
 | 3 | 수거 후 재탐지 루프 | 제거 성공 여부 확인 | 수거 후 같은 target 재검출 여부로 성공/실패 판정 |
-
-### 공동 Todo
-
-1. 실제 카메라 높이와 각도를 먼저 정하고 MediaPipe 입/손 검출률을 측정합니다.
-2. `risk_score`가 높은 물체를 먼저 처리할지, 로봇 거리와 접근 가능성을 함께 볼지 우선순위 정책을 합의합니다.
-3. 최종 시연 시나리오는 레고 탐지, 배터리/동전 검출 여부, 입 근접 긴급정지, 수거 후 재탐지 중 가능한 범위로 고정합니다.
-4. 발표용 지표는 모델 정확도(mAP/Precision/Recall)와 안전 행동 정확도(오탐/미탐, 1순위 목표 정확도)를 분리해서 제시합니다.
