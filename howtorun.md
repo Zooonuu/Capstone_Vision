@@ -45,10 +45,75 @@ source install/setup.bash
 
 `yolo_detector_node`는 `/image_raw`를 구독해 YOLO11 추론 + MediaPipe 포즈(입-손 근접 위험 판단)를 수행하고, `/detections`(DetectionArray, SLAM/Nav2용 픽셀 bbox)와 `vision/detected_objects`(원본 호환 JSON, 위험도/우선순위 포함)를 발행합니다.
 
+### 3.1 웹캠만 연결한 비전 파트 하드웨어 구성
+
+하드웨어 전체가 완성되지 않았을 때는 Jetson과 USB 웹캠만으로 비전 파트 입력을 확인할 수 있습니다. 웹캠은 PC가 아니라 Jetson USB 포트에 직접 연결합니다. PC는 Jetson에 SSH로 접속해서 명령어를 실행하고 로그를 보는 용도입니다.
+
+```text
+USB 웹캠
+  -> Jetson USB 포트
+  -> /dev/video0
+  -> webcam_image_publisher_node
+  -> /image_raw
+  -> yolo_detector_node
+  -> /detections, vision/detected_objects
+
+PC/노트북
+  -> 같은 Wi-Fi 또는 LAN
+  -> Jetson에 SSH 접속
+```
+
+Jetson에서 카메라가 잡혔는지 먼저 확인합니다.
+
+```bash
+ls /dev/video*
+v4l2-ctl --list-devices
+```
+
+정상이라면 `/dev/video0` 같은 장치가 보입니다. `/dev/video*`가 보이지 않으면 아직 Jetson이 웹캠을 인식하지 못한 상태이므로 코드 실행 전에 USB 연결, 카메라 전원, 포트, UVC 호환 여부를 먼저 확인해야 합니다.
+
+### 3.2 웹캠 프레임을 `/image_raw`로 발행
+
+웹캠만 연결해서 비전 파이프라인 입력을 테스트할 때는 먼저 별도 터미널에서 웹캠 프레임을 `/image_raw`로 발행합니다.
+
+```bash
+cd robot_ws
+source install/setup.bash
+ros2 run robot_perception webcam_image_publisher_node --ros-args \
+  -p camera_index:=0 \
+  -p image_topic:=/image_raw \
+  -p fps:=15.0 \
+  -p width:=640 \
+  -p height:=480
+```
+
+토픽이 살아 있는지는 아래 명령으로 확인합니다.
+
+```bash
+ros2 topic hz /image_raw
+ros2 topic echo /image_raw --once
+```
+
+여기서 `average rate`가 계속 출력되면 `webcam_image_publisher_node.py`는 정상 동작 중입니다.
+
+### 3.3 YOLO 인식 노드 연결
+
+그 다음 다른 터미널에서 기존 YOLO 인식 노드를 그대로 실행합니다.
+
 ```bash
 ros2 run robot_perception yolo_detector_node --ros-args \
   --params-file src/robot_perception/config/yolo_params.yaml \
-  -p model_path:=/absolute/path/to/best.pt
+  -p model_path:=/absolute/path/to/best.pt \
+  -p enable_visualization:=false
+```
+
+Jetson에 모니터를 연결해서 OpenCV 창을 띄울 수 있는 환경이면 `enable_visualization:=true`로 실행해도 됩니다. SSH/headless 환경에서는 `false`를 권장합니다.
+
+탐지 결과 토픽은 아래처럼 확인합니다.
+
+```bash
+ros2 topic echo /detections
+ros2 topic echo /vision/detected_objects
 ```
 
 주요 파라미터 (`config/yolo_params.yaml`):

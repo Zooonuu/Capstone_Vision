@@ -25,6 +25,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            'webcam_image_publisher_node = robot_perception.webcam_image_publisher_node:main',
             'yolo_detector_node = robot_perception.yolo_detector_node:main',
         ],
     },

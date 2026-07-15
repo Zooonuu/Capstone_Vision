@@ -10,6 +10,8 @@ import sys
 import cv2
 from ultralytics import YOLO
 
+__test__ = False
+
 
 def test_on_image(image_path, model_path="best.pt"):
     """

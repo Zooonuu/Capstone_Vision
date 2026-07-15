@@ -2,6 +2,9 @@
 build/
 install/
 log/
+build_current/
+install_current/
+log_current/
 
 # Python
 __pycache__/
